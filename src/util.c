@@ -72,7 +72,7 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     }
 
     // write info file
-    char info_path[FLUX_MAX_PATH_LEN];
+    char info_path[FLUX_MAX_PATH_LEN + 8];
     snprintf(info_path, sizeof(info_path), "%s/info", dir);
     FILE *f = fopen(info_path, "w");
     if (!f) return FLUX_ERR_GENERAL;
@@ -83,7 +83,7 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     fclose(f);
 
     // write files list
-    char files_path[FLUX_MAX_PATH_LEN];
+    char files_path[FLUX_MAX_PATH_LEN + 8];
     snprintf(files_path, sizeof(files_path), "%s/files", dir);
     f = fopen(files_path, "w");
     if (!f) return FLUX_ERR_GENERAL;
@@ -102,9 +102,9 @@ int flux_db_is_installed(const char *name) {
 }
 
 int flux_db_remove(const char *name) {
-    char info_path[FLUX_MAX_PATH_LEN];
-    char files_path[FLUX_MAX_PATH_LEN];
     char dir[FLUX_MAX_PATH_LEN];
+    char info_path[FLUX_MAX_PATH_LEN + 8];
+    char files_path[FLUX_MAX_PATH_LEN + 8];
 
     snprintf(dir, sizeof(dir), "/var/lib/flux/installed/%s", name);
     snprintf(info_path, sizeof(info_path), "/var/lib/flux/installed/%s/info", name);
