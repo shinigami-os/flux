@@ -16,12 +16,27 @@ static int fetch_source(const char *url, const char *dest) {
 
 static int verify_sha256(const char *path, const char *expected) {
     if (strcmp(expected, "SKIP") == 0) {
-        fprintf(stderr, "flux: warning: sha256 check skipped for %s\n", path);
+        fprintf(stderr, "flux: warning: sha256 check skipped\n");
         return 0;
     }
+
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "echo \"%s  %s\" | sha256sum -c --quiet", expected, path);
-    return system(cmd);
+    snprintf(cmd, sizeof(cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", path);
+    system(cmd);
+
+    FILE *f = fopen("/tmp/flux_hash_actual", "r");
+    if (!f) return 1;
+
+    char actual[65] = {0};
+    fread(actual, 1, 64, f);
+    fclose(f);
+    remove("/tmp/flux_hash_actual");
+
+    if (strcmp(actual, expected) != 0) {
+        fprintf(stderr, "flux: checksum mismatch\nexpected: %s\ngot:      %s\n", expected, actual);
+        return 1;
+    }
+    return 0;
 }
 
 static int extract_tarball(const char *tarball, const char *dest) {
