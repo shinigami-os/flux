@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -177,6 +179,28 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_GENERAL;
     }
 
+    // collect installed files from destdir
+    char installed_files[FLUX_MAX_INSTALLED_FILES][FLUX_MAX_PATH_LEN];
+    const char *file_ptrs[FLUX_MAX_INSTALLED_FILES];
+    int file_count = 0;
+
+    char find_cmd[512];
+    snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -type f", destdir);
+
+    FILE *find_out = popen(find_cmd, "r");
+    if (find_out) {
+        char fline[FLUX_MAX_PATH_LEN];
+        while (fgets(fline, sizeof(fline), find_out) && file_count < FLUX_MAX_INSTALLED_FILES) {
+            strip_newline(fline);
+            // strip destdir prefix to get absolute system path
+            const char *sys_path = fline + strlen(destdir);
+            strncpy(installed_files[file_count], sys_path, FLUX_MAX_PATH_LEN - 1);
+            file_ptrs[file_count] = installed_files[file_count];
+            file_count++;
+        }
+        pclose(find_out);
+    }
+
     // step 11: register in package db
     flux_pkg_info_t info;
     time_t now = time(NULL);
@@ -186,7 +210,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
     strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
     info.auto_installed = 0;
-    flux_db_register(&info, NULL, 0);
+    flux_db_register(&info, file_ptrs, file_count);
 
     // cleanup
     char cleanup_cmd[1024];
