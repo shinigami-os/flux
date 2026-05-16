@@ -1,4 +1,7 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../include/util.h"
 #include <time.h>
@@ -55,6 +58,8 @@ int flux_load_config(flux_config_t *config) {
         if (strcmp(key, "remote_repo_url") == 0) strncpy(config->remote_repo_url, val, FLUX_MAX_URL_LEN - 1);
         if (strcmp(key, "binary_cache_url") == 0) strncpy(config->binary_cache_url, val, FLUX_MAX_URL_LEN - 1); 
         if (strcmp(key, "default_build_flags")== 0) strncpy(config->default_build_flags,val, FLUX_MAX_CFLAGS_LEN - 1);
+        if (strcmp(key, "flux_pub_path") == 0) strncpy(config->flux_pub_path, val, FLUX_MAX_PATH_LEN - 1);
+        if (strcmp(key, "flux_secret_key_path") == 0) strncpy(config->flux_secret_key_path, val, FLUX_MAX_PATH_LEN - 1);
     }
 
     fclose(f);
@@ -124,5 +129,72 @@ int flux_db_remove(const char *name) {
     remove(info_path);
     remove(files_path);
     rmdir(dir);
+    return FLUX_ERR_NONE;
+}
+
+
+int flux_cache_key(const char *name, const char *version, const char *cflags, char *out, size_t outlen) {
+    // hash the cflags string
+    char cmd[FLUX_MAX_CFLAGS_LEN + 64];
+    snprintf(cmd, sizeof(cmd), "echo -n \"%s\" | sha256sum | cut -c1-6", cflags);
+
+    FILE *f = popen(cmd, "r");
+    if (!f) return FLUX_ERR_GENERAL;
+
+    char hash[16] = {0};
+    if (fgets(hash, sizeof(hash), f) == NULL) {
+        pclose(f);
+        return FLUX_ERR_GENERAL;
+    }
+    pclose(f);
+
+    // strip any trailing whitespace/newline from hash
+    strip_newline(hash);
+    trim_right(hash);
+
+    snprintf(out, outlen, "%s-%s-%s", name, version, hash);
+    return FLUX_ERR_NONE;
+}
+
+int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
+    snprintf(path_out, path_outlen, "/var/cache/flux/%s.tar.zst", key);
+    struct stat st;
+    if (stat(path_out, &st) != 0) return FLUX_ERR_NOT_FOUND;
+    return FLUX_ERR_NONE;
+}
+
+int flux_cache_store(const char *key, const char *destdir, const char *secret_key_path) {
+    char archive[FLUX_MAX_PATH_LEN];
+    snprintf(archive, sizeof(archive), "/var/cache/flux/%s.tar.zst", key);
+
+    // create /var/cache/flux/ if it doesn't exist
+    system("mkdir -p /var/cache/flux");
+
+    // package destdir into tar.zst
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -I zstd -cf \"%s\" .", destdir, archive);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "flux: failed to create cache archive\n");
+        return FLUX_ERR_CACHE;
+    }
+
+    // sign with minisign
+    snprintf(cmd, sizeof(cmd), "minisign -Sm \"%s\" -s \"%s\" -W", archive, secret_key_path);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "flux: failed to sign cache archive\n");
+        return FLUX_ERR_CACHE;
+    }
+
+    printf("[flux] cached: %s\n", archive);
+    return FLUX_ERR_NONE;
+}
+
+int flux_cache_verify(const char *path, const char *pub_path) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "minisign -Vm \"%s\" -p \"%s\"", path, pub_path);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "flux: cache signature verification failed\n");
+        return FLUX_ERR_CACHE;
+    }
     return FLUX_ERR_NONE;
 }

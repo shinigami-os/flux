@@ -45,6 +45,8 @@ typedef struct {
     char remote_repo_url[FLUX_MAX_PATH_LEN];
     char binary_cache_url[FLUX_MAX_URL_LEN];
     char default_build_flags[FLUX_MAX_CFLAGS_LEN];
+    char flux_pub_path[FLUX_MAX_PATH_LEN];
+    char flux_secret_key_path[FLUX_MAX_PATH_LEN];
 }flux_config_t;
 
 typedef struct {
