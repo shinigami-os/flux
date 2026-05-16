@@ -10,6 +10,9 @@
 #include "../include/util.h"
 #include "../include/parser.h"
 
+static int g_auto_install = 0;
+static int flux_resolve_deps(flux_recipe_t *recipe, flux_config_t *config, int build, char visited[][FLUX_MAX_NAME_LEN], int *visited_count);
+
 static int fetch_source(const char *url, const char *dest) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", dest, url);
@@ -109,37 +112,21 @@ int flux_install(int argc, char **argv, const char *usage) {
     char destdir[256];
     snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-destdir", pkg);
     char cache_key[256];
+    memset(cache_key, 0, sizeof(cache_key));
     char cache_path[FLUX_MAX_PATH_LEN];
+    int cache_hit = 0;
 
     if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
         if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
             printf("[flux] cache hit: %s\n", cache_path);
             if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
-                // extract cache archive directly to destdir
                 char cmd[1024];
                 snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -C \"%s\" -I zstd -xf \"%s\"", destdir, destdir, cache_path);
                 if (system(cmd) == 0) {
-                    // skip to step 10: copy to live system
-                    snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
-                    if (system(cmd) != 0) {
-                        fprintf(stderr, "flux: failed to copy cached files to system\n");
-                        return FLUX_ERR_GENERAL;
-                    }
-                    // register and exit
-                    flux_pkg_info_t info;
-                    memset(&info, 0, sizeof(info));
-                    strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
-                    strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
-                    time_t now = time(NULL);
-                    struct tm *t = localtime(&now);
-                    strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
-                    info.auto_installed = 0;
-                    flux_db_register(&info, NULL, 0);
-                    printf("[flux] %s installed successfully (from cache)\n", pkg);
-                    return FLUX_ERR_NONE;
+                    cache_hit = 1;
                 }
             }
-            printf("[flux] cache verification failed, falling back to source\n");
+            if (!cache_hit) printf("[flux] cache verification failed, falling back to source\n");
         } else {
             printf("[flux] cache miss, building from source\n");
         }
@@ -147,8 +134,35 @@ int flux_install(int argc, char **argv, const char *usage) {
         printf("[flux] cache key generation failed, building from source\n");
     }
 
-    // step 5: dep resolution (stubbed)
-    printf("[flux] dependency resolution: stub, skipping\n");
+    if (cache_hit) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "flux: failed to copy cached files to system\n");
+            return FLUX_ERR_GENERAL;
+        }
+        flux_pkg_info_t info;
+        memset(&info, 0, sizeof(info));
+        strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
+        strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
+        info.auto_installed = g_auto_install;
+        flux_db_register(&info, NULL, 0);
+        printf("[flux] %s installed successfully (from cache)\n", pkg);
+        return FLUX_ERR_NONE;
+    }
+
+    // step 5: resolve dependencies
+    char visited[64][FLUX_MAX_NAME_LEN];
+    memset(visited, 0, sizeof(visited));
+    int visited_count = 0;
+    strncpy(visited[0], pkg, FLUX_MAX_NAME_LEN - 1);
+    visited_count = 1;
+
+    int err2 = flux_resolve_deps(&recipe, &config, 1, visited, &visited_count);
+    if (err2 != FLUX_ERR_NONE) return err2;
 
     // step 6: fetch source
     char build_dir[256];
@@ -246,7 +260,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
     strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
     strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
-    info.auto_installed = 0;
+    info.auto_installed = g_auto_install;
     flux_db_register(&info, file_ptrs, file_count);
 
     // step 12: store in cache after successful build
@@ -261,5 +275,71 @@ int flux_install(int argc, char **argv, const char *usage) {
 
 
     printf("[flux] %s installed successfully\n", pkg);
+    return FLUX_ERR_NONE;
+}
+
+static int flux_resolve_deps(flux_recipe_t *recipe, flux_config_t *config, int build,
+                              char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
+    // iterate both lists if build, only rdeps if cache hit
+    char (*lists[2])[FLUX_MAX_NAME_LEN] = { recipe->rdeps, NULL };
+    int counts[2] = { FLUX_MAX_RDEPS, 0 };
+    if (build) {
+        lists[1] = recipe->deps;
+        counts[1] = FLUX_MAX_DEPS;
+    }
+
+    for (int l = 0; l < 2; l++) {
+        if (!lists[l]) continue;
+        for (int i = 0; i < counts[l]; i++) {
+            const char *dep = lists[l][i];
+            if (strlen(dep) == 0) continue;
+
+            // cycle detection
+            int already_visited = 0;
+            for (int v = 0; v < *visited_count; v++) {
+                if (strcmp(visited[v], dep) == 0) {
+                    already_visited = 1;
+                    break;
+                }
+            }
+            if (already_visited) continue;
+
+            // add to visited
+            if (*visited_count < 64) {
+                strncpy(visited[*visited_count], dep, FLUX_MAX_NAME_LEN - 1);
+                (*visited_count)++;
+            }
+
+            // skip if already installed
+            if (flux_db_is_installed(dep)) continue;
+
+            printf("[flux] resolving dependency: %s\n", dep);
+
+            // find and parse dep recipe
+            char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+            snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, dep);
+
+            flux_recipe_t dep_recipe;
+            memset(&dep_recipe, 0, sizeof(dep_recipe));
+            if (parse_kotodama(&dep_recipe, koto_path) != FLUX_ERR_NONE) {
+                fprintf(stderr, "flux: no recipe found for dependency '%s'\n", dep);
+                return FLUX_ERR_DEPENDENCY;
+            }
+
+            // recurse into dep's dependencies
+            int err = flux_resolve_deps(&dep_recipe, config, build, visited, visited_count);
+            if (err != FLUX_ERR_NONE) return err;
+
+            // install the dependency
+            char *dep_argv[] = { (char *)dep };
+            g_auto_install = 1;
+            err = flux_install(1, dep_argv, "flux install <pkg>");
+            g_auto_install = 0;
+            if (err != FLUX_ERR_NONE) {
+                fprintf(stderr, "flux: failed to install dependency '%s'\n", dep);
+                return FLUX_ERR_DEPENDENCY;
+            }
+        }
+    }
     return FLUX_ERR_NONE;
 }
