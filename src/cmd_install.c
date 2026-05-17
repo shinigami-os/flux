@@ -90,11 +90,17 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
+    struct stat st;
+    if (stat(config.local_repo_path, &st) != 0) {
+        fprintf(stderr, "flux: recipe repo not found at %s\n", config.local_repo_path);
+        fprintf(stderr, "hint: run 'flux update' to download the recipe repo\n");
+        return FLUX_ERR_GENERAL;
+    }
+
     // step 2: find kotodama file
     char koto_path[FLUX_MAX_PATH_LEN * 2];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config.local_repo_path, pkg);
 
-    struct stat st;
     if (stat(koto_path, &st) != 0) {
         fprintf(stderr, "flux: no recipe found for '%s'\n", pkg);
         return FLUX_ERR_NOT_FOUND;
@@ -278,8 +284,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     return FLUX_ERR_NONE;
 }
 
-static int flux_resolve_deps(flux_recipe_t *recipe, flux_config_t *config, int build,
-                              char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
+static int flux_resolve_deps(flux_recipe_t *recipe, flux_config_t *config, int build, char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
     // iterate both lists if build, only rdeps if cache hit
     char (*lists[2])[FLUX_MAX_NAME_LEN] = { recipe->rdeps, NULL };
     int counts[2] = { FLUX_MAX_RDEPS, 0 };
