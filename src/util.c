@@ -169,9 +169,11 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_NOT_FOUND;
     if (strlen(config.binary_cache_url) == 0) return FLUX_ERR_NOT_FOUND;
 
-    // check if remote has the package via HEAD request
-    char check_cmd[FLUX_MAX_URL_LEN + 128];
-    snprintf(check_cmd, sizeof(check_cmd), "curl -s -o /dev/null -w \"%%{http_code}\" --head \"%s/packages/%s.tar.zst\" | grep -q 200", config.binary_cache_url, key);
+    // check remote cache by attempting a HEAD request
+    char remote_url[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN];
+    snprintf(remote_url, sizeof(remote_url), "%s/packages/%s.tar.zst", config.binary_cache_url, key);
+    char check_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
+    snprintf(check_cmd, sizeof(check_cmd), "curl -s -o /dev/null -f --head \"%s\"", remote_url);
     if (system(check_cmd) != 0) return FLUX_ERR_NOT_FOUND;
 
     printf("[flux] remote cache hit, downloading...\n");
