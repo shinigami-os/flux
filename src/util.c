@@ -158,8 +158,44 @@ int flux_cache_key(const char *name, const char *version, const char *cflags, ch
 
 int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     snprintf(path_out, path_outlen, "/var/cache/flux/%s.tar.zst", key);
+
+    // check local cache first
     struct stat st;
-    if (stat(path_out, &st) != 0) return FLUX_ERR_NOT_FOUND;
+    if (stat(path_out, &st) == 0) return FLUX_ERR_NONE;
+
+    // local miss: try remote cache
+    flux_config_t config;
+    memset(&config, 0, sizeof(config));
+    if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_NOT_FOUND;
+    if (strlen(config.binary_cache_url) == 0) return FLUX_ERR_NOT_FOUND;
+
+    // check if remote has the package via HEAD request
+    char check_cmd[FLUX_MAX_URL_LEN + 128];
+    snprintf(check_cmd, sizeof(check_cmd), "curl -s -o /dev/null -w \"%%{http_code}\" --head \"%s/packages/%s.tar.zst\" | grep -q 200", config.binary_cache_url, key);
+    if (system(check_cmd) != 0) return FLUX_ERR_NOT_FOUND;
+
+    printf("[flux] remote cache hit, downloading...\n");
+    system("mkdir -p /var/cache/flux");
+
+    char dl_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
+
+    // download archive
+    snprintf(dl_cmd, sizeof(dl_cmd), "curl -s -L -o \"%s\" \"%s/packages/%s.tar.zst\"", path_out, config.binary_cache_url, key);
+    if (system(dl_cmd) != 0) {
+        remove(path_out);
+        return FLUX_ERR_NOT_FOUND;
+    }
+
+    // download signature
+    char sig_path[FLUX_MAX_PATH_LEN + 8];
+    snprintf(sig_path, sizeof(sig_path), "%s.minisig", path_out);
+    snprintf(dl_cmd, sizeof(dl_cmd), "curl -s -L -o \"%s\" \"%s/packages/%s.tar.zst.minisig\"", sig_path, config.binary_cache_url, key);
+    if (system(dl_cmd) != 0) {
+        remove(path_out);
+        remove(sig_path);
+        return FLUX_ERR_NOT_FOUND;
+    }
+
     return FLUX_ERR_NONE;
 }
 
@@ -167,7 +203,6 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
     char archive[FLUX_MAX_PATH_LEN];
     snprintf(archive, sizeof(archive), "/var/cache/flux/%s.tar.zst", key);
 
-    // create /var/cache/flux/ if it doesn't exist
     system("mkdir -p /var/cache/flux");
 
     // package destdir into tar.zst
