@@ -45,7 +45,7 @@ static int verify_sha256(const char *path, const char *expected) {
 
 static int extract_tarball(const char *tarball, const char *dest) {
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", dest, tarball, dest);
+    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && zstd -d \"%s\" -o /tmp/flux_cache_extract.tar && tar -C \"%s\" -xf /tmp/flux_cache_extract.tar && rm /tmp/flux_cache_extract.tar", dest, tarball, dest);
     return system(cmd);
 }
 

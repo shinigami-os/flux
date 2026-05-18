@@ -209,7 +209,7 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
 
     // package destdir into tar.zst
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -I zstd -cf \"%s\" .", destdir, archive);
+    snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | zstd -o \"%s\"", destdir, archive);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: failed to create cache archive\n");
         return FLUX_ERR_CACHE;
