@@ -216,51 +216,53 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    // step 5.1: collect full dependency graph
-    flux_install_queue_t queue;
-    memset(&queue, 0, sizeof(queue));
-    char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
-    memset(visited, 0, sizeof(visited));
-    int visited_count = 0;
+    if (!g_auto_installed){
+        // step 5.1: collect full dependency graph
+        flux_install_queue_t queue;
+        memset(&queue, 0, sizeof(queue));
+        char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+        memset(visited, 0, sizeof(visited));
+        int visited_count = 0;
 
-    int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count, !cache_hit);
-    if (err2 != FLUX_ERR_NONE) return err2;
+        int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count, !cache_hit);
+        if (err2 != FLUX_ERR_NONE) return err2;
 
-    // step 5.2: confirm with user if there are deps to install
-    if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
-        printf("\nThe following packages will be installed:\n  ");
-        for (int i = 0; i < queue.count; i++) {
-            // parse recipe to get version for display
-            char kp[FLUX_MAX_PATH_LEN * 2 + 16];
-            snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i]);
-            flux_recipe_t r;
-            memset(&r, 0, sizeof(r));
-            parse_kotodama(&r, kp);
-            printf("%s -v%s", queue.pkgs[i], r.version);
-            if (i < queue.count - 1) printf("  ");
+        // step 5.2: confirm with user if there are deps to install
+        if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
+            printf("\nThe following packages will be installed:\n  ");
+            for (int i = 0; i < queue.count; i++) {
+                // parse recipe to get version for display
+                char kp[FLUX_MAX_PATH_LEN * 2 + 16];
+                snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i]);
+                flux_recipe_t r;
+                memset(&r, 0, sizeof(r));
+                parse_kotodama(&r, kp);
+                printf("%s -v%s", queue.pkgs[i], r.version);
+                if (i < queue.count - 1) printf("  ");
+            }
+            printf("\n\nProceed? [Y/n] ");
+            char answer[8] = {0};
+            if (fgets(answer, sizeof(answer), stdin)) {
+                if (answer[0] == 'n' || answer[0] == 'N') {
+                    printf("Aborted.\n");
+                    return FLUX_ERR_NONE;
+                }
+            }
+            printf("\n");
         }
-        printf("\n\nProceed? [Y/n] ");
-        char answer[8] = {0};
-        if (fgets(answer, sizeof(answer), stdin)) {
-            if (answer[0] == 'n' || answer[0] == 'N') {
-                printf("Aborted.\n");
-                return FLUX_ERR_NONE;
+
+        // step 5.3: install each dep in order (skip the last entry which is pkg itself)
+        g_auto_installed = 1;
+        for (int i = 0; i < queue.count - 1; i++) {
+            char *dep_argv[] = { queue.pkgs[i] };
+            int err = flux_install(1, dep_argv, "flux install <pkg>");
+            if (err != FLUX_ERR_NONE) {
+                fprintf(stderr, "flux: failed to install dependency '%s'\n", queue.pkgs[i]);
+                return FLUX_ERR_DEPENDENCY;
             }
         }
-        printf("\n");
+        g_auto_installed = 0;
     }
-
-    // step 5.3: install each dep in order (skip the last entry which is pkg itself)
-    g_auto_installed = 1;
-    for (int i = 0; i < queue.count - 1; i++) {
-        char *dep_argv[] = { queue.pkgs[i] };
-        int err = flux_install(1, dep_argv, "flux install <pkg>");
-        if (err != FLUX_ERR_NONE) {
-            fprintf(stderr, "flux: failed to install dependency '%s'\n", queue.pkgs[i]);
-            return FLUX_ERR_DEPENDENCY;
-        }
-    }
-    g_auto_installed = 0;
 
     // step 6: fetch source
     char build_dir[256];
