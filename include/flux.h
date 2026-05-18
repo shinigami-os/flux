@@ -29,6 +29,7 @@
 #define FLUX_MAX_LDFLAGS_LEN 1024
 #define FLUX_MAX_PATH_LEN    256
 #define FLUX_MAX_INSTALLED_FILES 4096
+#define FLUX_MAX_INSTALL_QUEUE 256
 
 
 typedef int (*flux_cmd_fn)(int argc, char **argv, const char *usage);
@@ -73,5 +74,10 @@ typedef struct {
     char install_date[32];
     int  auto_installed; // 1 = pulled in as dep, 0 = explicitly installed
 } flux_pkg_info_t;
+
+typedef struct {
+    char pkgs[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int  count;
+} flux_install_queue_t;
 
 #endif

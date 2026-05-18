@@ -10,8 +10,7 @@
 #include "../include/util.h"
 #include "../include/parser.h"
 
-static int g_auto_install = 0;
-static int flux_resolve_deps(flux_recipe_t *recipe, flux_config_t *config, int build, char visited[][FLUX_MAX_NAME_LEN], int *visited_count);
+static int g_auto_installed = 0;
 
 static int fetch_source(const char *url, const char *dest) {
     char cmd[1024];
@@ -69,6 +68,62 @@ static int run_hook(const char *hook, const char *build_dir, const char *destdir
     return ret;
 }
 
+static int queue_contains(flux_install_queue_t *q, const char *name) {
+    for (int i = 0; i < q->count; i++)
+        if (strcmp(q->pkgs[i], name) == 0) return 1;
+    return 0;
+}
+
+static int collect_deps(const char *pkg, flux_config_t *config, flux_install_queue_t *queue, char visited[][FLUX_MAX_NAME_LEN], int *visited_count, int build) {
+    // cycle/visited check
+    for (int i = 0; i < *visited_count; i++)
+        if (strcmp(visited[i], pkg) == 0) return FLUX_ERR_NONE;
+
+    if (*visited_count < FLUX_MAX_INSTALL_QUEUE) {
+        strncpy(visited[*visited_count], pkg, FLUX_MAX_NAME_LEN - 1);
+        (*visited_count)++;
+    }
+
+    // already installed, no need to queue
+    if (flux_db_is_installed(pkg)) return FLUX_ERR_NONE;
+
+    // parse kotodama
+    char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg);
+
+    flux_recipe_t recipe;
+    memset(&recipe, 0, sizeof(recipe));
+    if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) {
+        fprintf(stderr, "flux: no recipe found for dependency '%s'\n", pkg);
+        return FLUX_ERR_DEPENDENCY;
+    }
+
+    // process deps first (post-order: deps before pkg)
+    char (*lists[2])[FLUX_MAX_NAME_LEN] = { recipe.rdeps, NULL };
+    int counts[2] = { FLUX_MAX_RDEPS, 0 };
+    if (build) {
+        lists[1] = recipe.deps;
+        counts[1] = FLUX_MAX_DEPS;
+    }
+
+    for (int l = 0; l < 2; l++) {
+        if (!lists[l]) continue;
+        for (int i = 0; i < counts[l]; i++) {
+            if (strlen(lists[l][i]) == 0) continue;
+            int err = collect_deps(lists[l][i], config, queue, visited, visited_count, build);
+            if (err != FLUX_ERR_NONE) return err;
+        }
+    }
+
+    // add pkg to queue after its deps
+    if (!queue_contains(queue, pkg) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
+        strncpy(queue->pkgs[queue->count], pkg, FLUX_MAX_NAME_LEN - 1);
+        queue->count++;
+    }
+
+    return FLUX_ERR_NONE;
+}
+
 int flux_install(int argc, char **argv, const char *usage) {
     if (argc < 1) {
         flux_usage_error(usage);
@@ -87,6 +142,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     // check if already installed
     if (flux_db_is_installed(pkg)) {
         printf("[flux] %s is already installed\n", pkg);
+        // TODO: if package is marked as auto_installed, mark it as manually installed
         return FLUX_ERR_NONE;
     }
 
@@ -154,21 +210,57 @@ int flux_install(int argc, char **argv, const char *usage) {
         time_t now = time(NULL);
         struct tm *t = localtime(&now);
         strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
-        info.auto_installed = g_auto_install;
+        info.auto_installed = g_auto_installed;
         flux_db_register(&info, NULL, 0);
         printf("[flux] %s installed successfully (from cache)\n", pkg);
         return FLUX_ERR_NONE;
     }
 
-    // step 5: resolve dependencies
-    char visited[64][FLUX_MAX_NAME_LEN];
+    // step 5.1: collect full dependency graph
+    flux_install_queue_t queue;
+    memset(&queue, 0, sizeof(queue));
+    char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
     memset(visited, 0, sizeof(visited));
     int visited_count = 0;
-    strncpy(visited[0], pkg, FLUX_MAX_NAME_LEN - 1);
-    visited_count = 1;
 
-    int err2 = flux_resolve_deps(&recipe, &config, 1, visited, &visited_count);
+    int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count, !cache_hit);
     if (err2 != FLUX_ERR_NONE) return err2;
+
+    // step 5.2: confirm with user if there are deps to install
+    if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
+        printf("\nThe following packages will be installed:\n  ");
+        for (int i = 0; i < queue.count; i++) {
+            // parse recipe to get version for display
+            char kp[FLUX_MAX_PATH_LEN * 2 + 16];
+            snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i]);
+            flux_recipe_t r;
+            memset(&r, 0, sizeof(r));
+            parse_kotodama(&r, kp);
+            printf("%s -v%s", queue.pkgs[i], r.version);
+            if (i < queue.count - 1) printf("  ");
+        }
+        printf("\n\nProceed? [Y/n] ");
+        char answer[8] = {0};
+        if (fgets(answer, sizeof(answer), stdin)) {
+            if (answer[0] == 'n' || answer[0] == 'N') {
+                printf("Aborted.\n");
+                return FLUX_ERR_NONE;
+            }
+        }
+        printf("\n");
+    }
+
+    // step 5.3: install each dep in order (skip the last entry which is pkg itself)
+    g_auto_installed = 1;
+    for (int i = 0; i < queue.count - 1; i++) {
+        char *dep_argv[] = { queue.pkgs[i] };
+        int err = flux_install(1, dep_argv, "flux install <pkg>");
+        if (err != FLUX_ERR_NONE) {
+            fprintf(stderr, "flux: failed to install dependency '%s'\n", queue.pkgs[i]);
+            return FLUX_ERR_DEPENDENCY;
+        }
+    }
+    g_auto_installed = 0;
 
     // step 6: fetch source
     char build_dir[256];
@@ -266,7 +358,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
     strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
     strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
-    info.auto_installed = g_auto_install;
+    info.auto_installed = g_auto_installed;
     flux_db_register(&info, file_ptrs, file_count);
 
     // step 12: store in cache after successful build
@@ -284,67 +376,3 @@ int flux_install(int argc, char **argv, const char *usage) {
     return FLUX_ERR_NONE;
 }
 
-static int flux_resolve_deps(flux_recipe_t *recipe, flux_config_t *config, int build, char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
-    // iterate both lists if build, only rdeps if cache hit
-    char (*lists[2])[FLUX_MAX_NAME_LEN] = { recipe->rdeps, NULL };
-    int counts[2] = { FLUX_MAX_RDEPS, 0 };
-    if (build) {
-        lists[1] = recipe->deps;
-        counts[1] = FLUX_MAX_DEPS;
-    }
-
-    for (int l = 0; l < 2; l++) {
-        if (!lists[l]) continue;
-        for (int i = 0; i < counts[l]; i++) {
-            const char *dep = lists[l][i];
-            if (strlen(dep) == 0) continue;
-
-            // cycle detection
-            int already_visited = 0;
-            for (int v = 0; v < *visited_count; v++) {
-                if (strcmp(visited[v], dep) == 0) {
-                    already_visited = 1;
-                    break;
-                }
-            }
-            if (already_visited) continue;
-
-            // add to visited
-            if (*visited_count < 64) {
-                strncpy(visited[*visited_count], dep, FLUX_MAX_NAME_LEN - 1);
-                (*visited_count)++;
-            }
-
-            // skip if already installed
-            if (flux_db_is_installed(dep)) continue;
-
-            printf("[flux] resolving dependency: %s\n", dep);
-
-            // find and parse dep recipe
-            char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
-            snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, dep);
-
-            flux_recipe_t dep_recipe;
-            memset(&dep_recipe, 0, sizeof(dep_recipe));
-            if (parse_kotodama(&dep_recipe, koto_path) != FLUX_ERR_NONE) {
-                fprintf(stderr, "flux: no recipe found for dependency '%s'\n", dep);
-                return FLUX_ERR_DEPENDENCY;
-            }
-
-            // recurse into dep's dependencies
-            int err = flux_resolve_deps(&dep_recipe, config, build, visited, visited_count);
-            if (err != FLUX_ERR_NONE) return err;
-
-            // install the dependency
-            char *dep_argv[] = { (char *)dep };
-            g_auto_install = 1;
-            err = flux_install(1, dep_argv, "flux install <pkg>");
-            g_auto_install = 0;
-            if (err != FLUX_ERR_NONE) {
-                fprintf(stderr, "flux: failed to install dependency '%s'\n", dep);
-                return FLUX_ERR_DEPENDENCY;
-            }
-        }
-    }
-    return FLUX_ERR_NONE;
-}
