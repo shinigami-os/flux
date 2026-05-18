@@ -19,7 +19,7 @@ static int fetch_source(const char *url, const char *dest) {
 }
 
 static int verify_sha256(const char *path, const char *expected) {
-    if (strcmp(expected, "SKIP") == 0) {
+    if (strcmp(expected, "SKIP") == 0 || strlen(expected) == 0) {
         fprintf(stderr, "flux: warning: sha256 check skipped\n");
         return 0;
     }
@@ -264,92 +264,98 @@ int flux_install(int argc, char **argv, const char *usage) {
         g_auto_installed = 0;
     }
 
-    // step 6: fetch source
     char build_dir[256];
-    snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
-
     char tarball[256];
-    snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s.tar.gz", pkg);
-
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "mkdir -p /tmp/flux-build");
-    system(cmd);
-
-    printf("[flux] fetching source: %s\n", recipe.url);
-    if (fetch_source(recipe.url, tarball) != 0) {
-        fprintf(stderr, "flux: failed to fetch source\n");
-        return FLUX_ERR_NETWORK;
-    }
-
-    // step 7: verify sha256
-    printf("[flux] verifying checksum...\n");
-    if (verify_sha256(tarball, recipe.sha256) != 0) {
-        fprintf(stderr, "flux: checksum verification failed\n");
-        return FLUX_ERR_GENERAL;
-    }
-
-    // step 8: extract
-    printf("[flux] extracting...\n");
-    if (extract_tarball(tarball, build_dir) != 0) {
-        fprintf(stderr, "flux: failed to extract tarball\n");
-        return FLUX_ERR_GENERAL;
-    }
-
-    // step 9: run hooks
-    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
-    system(cmd);
-
-    printf("[flux] running pre-build...\n");
-    if (run_hook(recipe.hook_pre_build, build_dir, destdir) != 0) {
-        fprintf(stderr, "flux: pre-build failed\n");
-        return FLUX_ERR_BUILD;
-    }
-
-    printf("[flux] building...\n");
-    if (run_hook(recipe.hook_build, build_dir, destdir) != 0) {
-        fprintf(stderr, "flux: build failed\n");
-        return FLUX_ERR_BUILD;
-    }
-
-    printf("[flux] running post-build...\n");
-    if (run_hook(recipe.hook_post_build, build_dir, destdir) != 0) {
-        fprintf(stderr, "flux: post-build failed\n");
-        return FLUX_ERR_BUILD;
-    }
-
-    printf("[flux] installing files...\n");
-    if (run_hook(recipe.hook_install, build_dir, destdir) != 0) {
-        fprintf(stderr, "flux: install hook failed\n");
-        return FLUX_ERR_BUILD;
-    }
-
-    // step 10: copy from destdir to live system
-    snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to copy files to system\n");
-        return FLUX_ERR_GENERAL;
-    }
-
-    // collect installed files from destdir
     char installed_files[FLUX_MAX_INSTALLED_FILES][FLUX_MAX_PATH_LEN];
     const char *file_ptrs[FLUX_MAX_INSTALLED_FILES];
     int file_count = 0;
 
-    char find_cmd[512];
-    snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -type f", destdir);
+    snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
+    snprintf(tarball,   sizeof(tarball),   "/tmp/flux-build/%s.tar.gz", pkg);
 
-    FILE *find_out = popen(find_cmd, "r");
-    if (find_out) {
-        char fline[FLUX_MAX_PATH_LEN];
-        while (fgets(fline, sizeof(fline), find_out) && file_count < FLUX_MAX_INSTALLED_FILES) {
-            strip_newline(fline);
-            // strip destdir prefix to get absolute system path
-            const char *sys_path = fline + strlen(destdir);
-            strncpy(installed_files[file_count], sys_path, FLUX_MAX_PATH_LEN - 1);
-            file_ptrs[file_count] = installed_files[file_count];
-            file_count++;
+    if (strlen(recipe.url) == 0) {
+        // step 6: fetch source
+        snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
+
+        snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s.tar.gz", pkg);
+
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "mkdir -p /tmp/flux-build");
+        system(cmd);
+
+        printf("[flux] fetching source: %s\n", recipe.url);
+        if (fetch_source(recipe.url, tarball) != 0) {
+            fprintf(stderr, "flux: failed to fetch source\n");
+            return FLUX_ERR_NETWORK;
         }
-        pclose(find_out);
+
+        // step 7: verify sha256
+        printf("[flux] verifying checksum...\n");
+        if (verify_sha256(tarball, recipe.sha256) != 0) {
+            fprintf(stderr, "flux: checksum verification failed\n");
+            return FLUX_ERR_GENERAL;
+        }
+
+        // step 8: extract
+        printf("[flux] extracting...\n");
+        if (extract_tarball(tarball, build_dir) != 0) {
+            fprintf(stderr, "flux: failed to extract tarball\n");
+            return FLUX_ERR_GENERAL;
+        }
+
+        // step 9: run hooks
+        snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
+        system(cmd);
+
+        printf("[flux] running pre-build...\n");
+        if (run_hook(recipe.hook_pre_build, build_dir, destdir) != 0) {
+            fprintf(stderr, "flux: pre-build failed\n");
+            return FLUX_ERR_BUILD;
+        }
+
+        printf("[flux] building...\n");
+        if (run_hook(recipe.hook_build, build_dir, destdir) != 0) {
+            fprintf(stderr, "flux: build failed\n");
+            return FLUX_ERR_BUILD;
+        }
+
+        printf("[flux] running post-build...\n");
+        if (run_hook(recipe.hook_post_build, build_dir, destdir) != 0) {
+            fprintf(stderr, "flux: post-build failed\n");
+            return FLUX_ERR_BUILD;
+        }
+
+        printf("[flux] installing files...\n");
+        if (run_hook(recipe.hook_install, build_dir, destdir) != 0) {
+            fprintf(stderr, "flux: install hook failed\n");
+            return FLUX_ERR_BUILD;
+        }
+
+        // step 10: copy from destdir to live system
+        snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "flux: failed to copy files to system\n");
+            return FLUX_ERR_GENERAL;
+        }
+
+        // collect installed files from destdir
+
+        char find_cmd[512];
+        snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -type f", destdir);
+
+        FILE *find_out = popen(find_cmd, "r");
+        if (find_out) {
+            char fline[FLUX_MAX_PATH_LEN];
+            while (fgets(fline, sizeof(fline), find_out) && file_count < FLUX_MAX_INSTALLED_FILES) {
+                strip_newline(fline);
+                // strip destdir prefix to get absolute system path
+                const char *sys_path = fline + strlen(destdir);
+                strncpy(installed_files[file_count], sys_path, FLUX_MAX_PATH_LEN - 1);
+                file_ptrs[file_count] = installed_files[file_count];
+                file_count++;
+            }
+            pclose(find_out);
+        }
     }
 
     // step 11: register in package db

@@ -44,6 +44,11 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     printf("[flux] %s version %s\n", recipe.name, recipe.version);
 
+    if (strlen(recipe.url) == 0) {
+        printf("[flux] %s is a meta-package, nothing to build\n", pkg);
+        return FLUX_ERR_NONE;
+    }
+
     // compute cache key
     char cache_key[256];
     memset(cache_key, 0, sizeof(cache_key));
