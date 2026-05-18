@@ -56,7 +56,6 @@ int flux_build(int argc, char **argv, const char *usage) {
     char cache_path[FLUX_MAX_PATH_LEN];
     if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
         printf("[flux] %s is already cached at %s\n", pkg, cache_path);
-        printf("[flux] use push-cache.sh to upload it to the remote cache\n");
         return FLUX_ERR_NONE;
     }
 
