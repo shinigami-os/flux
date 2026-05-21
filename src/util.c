@@ -152,7 +152,7 @@ int flux_cache_key(const char *name, const char *version, const char *cflags, ch
     strip_newline(hash);
     trim_right(hash);
 
-    snprintf(out, outlen, "%s-%s-%s", name, version, hash);
+    snprintf(out, outlen, "%s_%s-%s", name, version, hash);
     return FLUX_ERR_NONE;
 }
 
