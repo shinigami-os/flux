@@ -222,6 +222,14 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
         return FLUX_ERR_CACHE;
     }
 
+    // give ownership back to the calling user if running under sudo
+    const char *sudo_user = getenv("SUDO_USER");
+    if (sudo_user && strlen(sudo_user) > 0) {
+        char chown_cmd[FLUX_MAX_PATH_LEN + 512];
+        snprintf(chown_cmd, sizeof(chown_cmd), "chown %s:%s \"%s\" \"%s.minisig\"", sudo_user, sudo_user, archive, archive);
+        system(chown_cmd);
+    }
+
     printf("[flux] cached: %s\n", archive);
     return FLUX_ERR_NONE;
 }
