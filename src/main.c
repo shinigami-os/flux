@@ -22,7 +22,7 @@ int flux_compat(int argc, char **argv, const char *usage);
 flux_cmd_t commands[] = {
     {"install", flux_install, "Install a package (from cache or compile)", "flux install <pkg>"},
     {"search", flux_search, "Search available recipes", "flux search <query>"},
-    {"build", flux_build, "Force local compilation regardless of cache", "flux build <pkg>"},
+    {"build", flux_build, "Force local compilation regardless of cache", "flux build [--cross] <pkg>"},
     {"remove", flux_remove, "Remove a package and orphaned dependencies", "flux remove <pkg>"},
     {"update", flux_update, "Sync recipe repo and update all installed packages", "flux update"},
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},

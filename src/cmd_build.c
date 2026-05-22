@@ -14,7 +14,18 @@ int flux_build(int argc, char **argv, const char *usage) {
         return FLUX_ERR_USAGE;
     }
 
-    const char *pkg = argv[0];
+    int cross = 0;
+    int pkg_idx = 0;
+    if (argc >= 1 && strcmp(argv[0], "--cross") == 0) {
+        cross = 1;
+        pkg_idx = 1;
+        if (argc < 2) {
+            flux_usage_error(usage);
+            return FLUX_ERR_USAGE;
+        }
+    }
+    const char *pkg = argv[pkg_idx];
+
     printf("[flux] building: %s\n", pkg);
 
     // load config
@@ -118,8 +129,17 @@ int flux_build(int argc, char **argv, const char *usage) {
             snprintf(_script, sizeof(_script), "%s/.flux_hook.sh", build_dir); \
             FILE *_f = fopen(_script, "w"); \
             if (!_f) return FLUX_ERR_GENERAL; \
-            fprintf(_f, "#!/bin/sh\nset -e\ncd \"%s\"\nexport DESTDIR=\"%s\"\n%s\n", \
-                    build_dir, destdir, hook); \
+            fprintf(_f, "#!/bin/sh\nset -e\ncd \"%s\"\nexport DESTDIR=\"%s\"\n", build_dir, destdir); \
+            if (cross) { \
+                fprintf(_f, "export CC=\"%sgcc\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export CXX=\"%sg++\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export AR=\"%sar\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export LD=\"%sld\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export STRIP=\"%sstrip\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export CROSS_COMPILE=\"%s\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export FLUX_CROSS_HOST=\"x86_64-linux-musl\"\n"); \
+            } \
+            fprintf(_f, "%s\n", hook); \
             fclose(_f); \
             chmod(_script, 0755); \
             char _cmd[512]; \

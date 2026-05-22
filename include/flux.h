@@ -48,6 +48,8 @@ typedef struct {
     char default_build_flags[FLUX_MAX_CFLAGS_LEN];
     char flux_pub_path[FLUX_MAX_PATH_LEN];
     char flux_secret_key_path[FLUX_MAX_PATH_LEN];
+    char flux_cross_compile_prefix[FLUX_MAX_PATH_LEN];
+    char flux_cross_compile_sysroot[FLUX_MAX_PATH_LEN];
 }flux_config_t;
 
 typedef struct {
