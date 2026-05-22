@@ -145,6 +145,9 @@ int flux_build(int argc, char **argv, const char *usage) {
                 fprintf(_f, "export CXXFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
                 fprintf(_f, "export LDFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
             } \
+            fprintf(_f, "export PKG_CONFIG_PATH=\"%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig\"\n", config.flux_cross_compile_sysroot, config.flux_cross_compile_sysroot); \
+            fprintf(_f, "export PKG_CONFIG_LIBDIR=\"%s/usr/lib/pkgconfig\"\n", config.flux_cross_compile_sysroot); \
+            fprintf(_f, "export PKG_CONFIG_SYSROOT_DIR=\"%s\"\n", config.flux_cross_compile_sysroot); \
             fprintf(_f, "%s\n", hook); \
             fclose(_f); \
             chmod(_script, 0755); \
@@ -167,6 +170,13 @@ int flux_build(int argc, char **argv, const char *usage) {
     RUN_HOOK(recipe.hook_post_build, "post-build");
     printf("[flux] installing to destdir...\n");
     RUN_HOOK(recipe.hook_install, "install");
+
+    if (cross && strlen(config.flux_cross_compile_sysroot) > 0) {
+        char sysroot_cmd[FLUX_MAX_PATH_LEN * 2 + 32];
+        snprintf(sysroot_cmd, sizeof(sysroot_cmd), "cp -a \"%s\"/. \"%s\"/", destdir, config.flux_cross_compile_sysroot);
+        system(sysroot_cmd);
+        printf("[flux] installed cross build artifacts to sysroot\n");
+    }
 
     #undef RUN_HOOK
 
