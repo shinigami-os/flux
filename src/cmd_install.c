@@ -183,7 +183,7 @@ int flux_install(int argc, char **argv, const char *usage) {
             printf("[flux] cache hit: %s\n", cache_path);
             if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
                 char cmd[1024];
-                snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -C \"%s\" -I zstd -xf \"%s\"", destdir, destdir, cache_path);
+                snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && zstd -d \"%s\" -o /tmp/flux_cache_extract.tar && tar -C \"%s\" -xf /tmp/flux_cache_extract.tar && rm /tmp/flux_cache_extract.tar", destdir, cache_path, destdir);
                 if (system(cmd) == 0) {
                     cache_hit = 1;
                 }
