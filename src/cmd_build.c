@@ -131,6 +131,7 @@ int flux_build(int argc, char **argv, const char *usage) {
             if (!_f) return FLUX_ERR_GENERAL; \
             fprintf(_f, "#!/bin/sh\nset -e\ncd \"%s\"\nexport DESTDIR=\"%s\"\n", build_dir, destdir); \
             if (cross) { \
+                fprintf(_f, "export PATH=\"%s:/usr/local/bin:/usr/bin:/bin:$PATH\"\n", config.flux_cross_toolchain_path); \
                 fprintf(_f, "export CC=\"%sgcc\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export CXX=\"%sg++\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export AR=\"%sar\"\n", config.flux_cross_compile_prefix); \
@@ -138,6 +139,11 @@ int flux_build(int argc, char **argv, const char *usage) {
                 fprintf(_f, "export STRIP=\"%sstrip\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export CROSS_COMPILE=\"%s\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export FLUX_CROSS_HOST=\"x86_64-linux-musl\"\n"); \
+            } \
+            if (cross && strlen(config.flux_cross_compile_sysroot) > 0) { \
+                fprintf(_f, "export CFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
+                fprintf(_f, "export CXXFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
+                fprintf(_f, "export LDFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
             } \
             fprintf(_f, "%s\n", hook); \
             fclose(_f); \

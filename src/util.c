@@ -60,8 +60,9 @@ int flux_load_config(flux_config_t *config) {
         if (strcmp(key, "default_build_flags")== 0) strncpy(config->default_build_flags,val, FLUX_MAX_CFLAGS_LEN - 1);
         if (strcmp(key, "flux_pub_path") == 0) strncpy(config->flux_pub_path, val, FLUX_MAX_PATH_LEN - 1);
         if (strcmp(key, "flux_secret_key_path") == 0) strncpy(config->flux_secret_key_path, val, FLUX_MAX_PATH_LEN - 1);
-        if (strcmp(key, "flux_cross_compile_prefix") == 0) strncpy(config->flux_cross_compile_prefix, val, FLUX_MAX_PATH_LEN - 1);
-        if (strcmp(key, "flux_cross_compile_sysroot") == 0) strncpy(config->flux_cross_compile_sysroot, val, FLUX_MAX_PATH_LEN - 1);
+        if (strcmp(key, "cross_compile_prefix") == 0) strncpy(config->flux_cross_compile_prefix, val, FLUX_MAX_PATH_LEN - 1);
+        if (strcmp(key, "cross_compile_sysroot") == 0) strncpy(config->flux_cross_compile_sysroot, val, FLUX_MAX_PATH_LEN - 1);
+        if (strcmp(key, "cross_toolchain_path") == 0) strncpy(config->flux_cross_toolchain_path, val, FLUX_MAX_PATH_LEN - 1);
     }
 
     fclose(f);
