@@ -51,6 +51,7 @@ typedef struct {
     char flux_cross_compile_prefix[FLUX_MAX_PATH_LEN];
     char flux_cross_compile_sysroot[FLUX_MAX_PATH_LEN];
     char flux_cross_toolchain_path[FLUX_MAX_PATH_LEN];
+    char flux_cross_gcc_libpath[FLUX_MAX_PATH_LEN];
 }flux_config_t;
 
 typedef struct {

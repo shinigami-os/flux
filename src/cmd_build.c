@@ -86,7 +86,7 @@ int flux_build(int argc, char **argv, const char *usage) {
     system("mkdir -p /tmp/flux-build");
 
     printf("[flux] fetching source: %s\n", recipe.url);
-    char cmd[1024];
+    char cmd[2048];
     snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", tarball, recipe.url);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: failed to fetch source\n");
@@ -112,7 +112,7 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     // extract
     printf("[flux] extracting...\n");
-    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", build_dir, tarball, build_dir);
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", build_dir, build_dir, tarball, build_dir);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: failed to extract tarball\n");
         return FLUX_ERR_GENERAL;
@@ -121,6 +121,16 @@ int flux_build(int argc, char **argv, const char *usage) {
     // run hooks
     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
     system(cmd);
+
+    if (cross) {
+        char patch_cmd[FLUX_MAX_PATH_LEN * 2];
+        snprintf(patch_cmd, sizeof(patch_cmd),
+            "find \"%s\" -name configure -type f"
+            " | xargs -r sed -i \"s|oldincludedir='/usr/include'|oldincludedir='/nonexistent'|g\""
+            " 2>/dev/null || true",
+            build_dir);
+        system(patch_cmd);
+    }
 
     // helper: write and run a hook script
     #define RUN_HOOK(hook, label) do { \
@@ -138,12 +148,9 @@ int flux_build(int argc, char **argv, const char *usage) {
                 fprintf(_f, "export LD=\"%sld\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export STRIP=\"%sstrip\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export CROSS_COMPILE=\"%s\"\n", config.flux_cross_compile_prefix); \
+                fprintf(_f, "export CPP=\"%sgcc -E\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export FLUX_CROSS_HOST=\"x86_64-linux-musl\"\n"); \
-            } \
-            if (cross && strlen(config.flux_cross_compile_sysroot) > 0) { \
-                fprintf(_f, "export CFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
-                fprintf(_f, "export CXXFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
-                fprintf(_f, "export LDFLAGS=\"--sysroot=%s\"\n", config.flux_cross_compile_sysroot); \
+                fprintf(_f, "export FLUX_CROSS_SYSROOT=\"%s\"\n", config.flux_cross_compile_sysroot); \
             } \
             fprintf(_f, "export PKG_CONFIG_PATH=\"%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig\"\n", config.flux_cross_compile_sysroot, config.flux_cross_compile_sysroot); \
             fprintf(_f, "export PKG_CONFIG_LIBDIR=\"%s/usr/lib/pkgconfig\"\n", config.flux_cross_compile_sysroot); \
