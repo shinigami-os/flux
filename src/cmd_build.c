@@ -183,6 +183,18 @@ int flux_build(int argc, char **argv, const char *usage) {
         snprintf(sysroot_cmd, sizeof(sysroot_cmd), "cp -a \"%s\"/. \"%s\"/", destdir, config.flux_cross_compile_sysroot);
         system(sysroot_cmd);
         printf("[flux] installed cross build artifacts to sysroot\n");
+
+        char la_patch[FLUX_MAX_PATH_LEN * 4 + 128];
+        snprintf(la_patch, sizeof(la_patch),
+            "find \"%s\" -name \"*.la\" | xargs -r sed -i"
+            " -e \"s|^libdir='/usr/|libdir='%s/usr/|g\""
+            " -e \"s| /usr/lib/| %s/usr/lib/|g\""
+            " 2>/dev/null || true",
+            config.flux_cross_compile_sysroot,
+            config.flux_cross_compile_sysroot,
+            config.flux_cross_compile_sysroot);
+        system(la_patch);
+        printf("[flux] patched .la files in sysroot\n");
     }
 
     #undef RUN_HOOK
