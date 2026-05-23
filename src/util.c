@@ -186,7 +186,7 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     char dl_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
 
     // download archive
-    snprintf(dl_cmd, sizeof(dl_cmd), "curl -s -L -o \"%s\" \"%s/packages/%s.tar.zst\"", path_out, config.binary_cache_url, key);
+    snprintf(dl_cmd, sizeof(dl_cmd), "curl -L --max-time 3600 --retry 3 -o \"%s\" \"%s/packages/%s.tar.zst\"", path_out, config.binary_cache_url, key);
     if (system(dl_cmd) != 0) {
         remove(path_out);
         return FLUX_ERR_NOT_FOUND;
