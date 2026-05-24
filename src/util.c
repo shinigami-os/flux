@@ -137,10 +137,12 @@ int flux_db_remove(const char *name) {
 }
 
 
-int flux_cache_key(const char *name, const char *version, const char *cflags, char *out, size_t outlen) {
-    // hash the cflags string
-    char cmd[FLUX_MAX_CFLAGS_LEN + 64];
-    snprintf(cmd, sizeof(cmd), "echo -n \"%s\" | sha256sum | cut -c1-6", cflags);
+int flux_cache_key(const char *name, const char *version, const char *cflags, const char *target, char *out, size_t outlen) {
+    // hash cflags + target so cross and native builds get distinct keys
+    char input[FLUX_MAX_CFLAGS_LEN + 64];
+    snprintf(input, sizeof(input), "%s|%s", cflags, target ? target : "");
+    char cmd[sizeof(input) + 64];
+    snprintf(cmd, sizeof(cmd), "echo -n \"%s\" | sha256sum | cut -c1-6", input);
 
     FILE *f = popen(cmd, "r");
     if (!f) return FLUX_ERR_GENERAL;

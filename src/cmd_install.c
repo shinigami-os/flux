@@ -178,7 +178,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     char cache_path[FLUX_MAX_PATH_LEN];
     int cache_hit = 0;
 
-    if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+    if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, "", cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
         if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
             printf("[flux] cache hit: %s\n", cache_path);
             if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
