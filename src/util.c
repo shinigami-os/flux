@@ -64,6 +64,7 @@ int flux_load_config(flux_config_t *config) {
         if (strcmp(key, "cross_compile_sysroot") == 0) strncpy(config->flux_cross_compile_sysroot, val, FLUX_MAX_PATH_LEN - 1);
         if (strcmp(key, "cross_toolchain_path") == 0) strncpy(config->flux_cross_toolchain_path, val, FLUX_MAX_PATH_LEN - 1);
         if (strcmp(key, "cross_gcc_libpath") == 0) strncpy(config->flux_cross_gcc_libpath , val, FLUX_MAX_PATH_LEN - 1);
+        if (strcmp(key, "package_target") == 0) strncpy(config->package_target, val, sizeof(config->package_target) - 1);
     }
 
     fclose(f);

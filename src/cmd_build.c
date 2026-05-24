@@ -63,7 +63,7 @@ int flux_build(int argc, char **argv, const char *usage) {
     // compute cache key
     char cache_key[256];
     memset(cache_key, 0, sizeof(cache_key));
-    const char *cross_target = cross ? "x86_64-linux-musl" : "";
+    const char *cross_target = cross ? "x86_64-linux-musl" : config.package_target;
     if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cross_target, cache_key, sizeof(cache_key)) != FLUX_ERR_NONE) {
         fprintf(stderr, "flux: failed to compute cache key\n");
         return FLUX_ERR_GENERAL;
