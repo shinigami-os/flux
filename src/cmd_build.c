@@ -78,11 +78,14 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     // fetch source
     char build_dir[256];
-    char tarball[256];
+    char tarball[512];
     char destdir[256];
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
-    snprintf(tarball,   sizeof(tarball),   "/tmp/flux-build/%s.tar.gz", pkg);
     snprintf(destdir,   sizeof(destdir),   "/tmp/flux-build/%s-destdir", pkg);
+    // use the actual filename from the URL so tar gets the right extension
+    const char *url_basename = strrchr(recipe.url, '/');
+    url_basename = url_basename ? url_basename + 1 : recipe.url;
+    snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
     system("mkdir -p /tmp/flux-build");
 
@@ -96,7 +99,7 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     // verify sha256
     printf("[flux] verifying checksum...\n");
-    char sha_cmd[512];
+    char sha_cmd[640];
     snprintf(sha_cmd, sizeof(sha_cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", tarball);
     system(sha_cmd);
     FILE *f = fopen("/tmp/flux_hash_actual", "r");
@@ -208,7 +211,7 @@ int flux_build(int argc, char **argv, const char *usage) {
     }
 
     // cleanup
-    char cleanup[1024];
+    char cleanup[1280];
     snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);
     system(cleanup);
 

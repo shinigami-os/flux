@@ -7,6 +7,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 
 void flux_usage_error(const char *usage){
     printf("usage: %s\n", usage);
@@ -76,7 +77,9 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     char dir[FLUX_MAX_PATH_LEN];
     snprintf(dir, sizeof(dir), "/var/lib/flux/installed/%s", info->name);
 
-    if (mkdir(dir, 0755) != 0) {
+    mkdir("/var/lib/flux", 0755);
+    mkdir("/var/lib/flux/installed", 0755);
+    if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
         fprintf(stderr, "flux: failed to create package db entry for %s\n", info->name);
         return FLUX_ERR_GENERAL;
     }
