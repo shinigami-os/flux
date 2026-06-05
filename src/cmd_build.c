@@ -55,10 +55,7 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     printf("[flux] %s version %s\n", recipe.name, recipe.version);
 
-    if (strlen(recipe.url) == 0) {
-        printf("[flux] %s is a meta-package, nothing to build\n", pkg);
-        return FLUX_ERR_NONE;
-    }
+    int is_meta = (strlen(recipe.url) == 0);
 
     // compute cache key
     char cache_key[256];
@@ -76,57 +73,67 @@ int flux_build(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    // fetch source
+    // pure meta-package: no source and no install hook — nothing to do
+    if (is_meta && strlen(recipe.hook_install) == 0) {
+        printf("[flux] %s is a meta-package, nothing to build\n", pkg);
+        return FLUX_ERR_NONE;
+    }
+
     char build_dir[256];
     char tarball[512];
     char destdir[256];
+    char cmd[2048];
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
     snprintf(destdir,   sizeof(destdir),   "/tmp/flux-build/%s-destdir", pkg);
-    // use the actual filename from the URL so tar gets the right extension
-    const char *url_basename = strrchr(recipe.url, '/');
-    url_basename = url_basename ? url_basename + 1 : recipe.url;
-    snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
     system("mkdir -p /tmp/flux-build");
 
-    printf("[flux] fetching source: %s\n", recipe.url);
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", tarball, recipe.url);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to fetch source\n");
-        return FLUX_ERR_NETWORK;
-    }
+    if (!is_meta) {
+        const char *url_basename = strrchr(recipe.url, '/');
+        url_basename = url_basename ? url_basename + 1 : recipe.url;
+        snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
-    // verify sha256
-    printf("[flux] verifying checksum...\n");
-    char sha_cmd[640];
-    snprintf(sha_cmd, sizeof(sha_cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", tarball);
-    system(sha_cmd);
-    FILE *f = fopen("/tmp/flux_hash_actual", "r");
-    if (!f) return FLUX_ERR_GENERAL;
-    char actual[65] = {0};
-    fread(actual, 1, 64, f);
-    fclose(f);
-    remove("/tmp/flux_hash_actual");
-    if (strcmp(actual, recipe.sha256) != 0) {
-        fprintf(stderr, "flux: checksum mismatch\nexpected: %s\ngot:      %s\n",
-                recipe.sha256, actual);
-        return FLUX_ERR_GENERAL;
-    }
+        printf("[flux] fetching source: %s\n", recipe.url);
+        snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", tarball, recipe.url);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "flux: failed to fetch source\n");
+            return FLUX_ERR_NETWORK;
+        }
 
-    // extract
-    printf("[flux] extracting...\n");
-    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", build_dir, build_dir, tarball, build_dir);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to extract tarball\n");
-        return FLUX_ERR_GENERAL;
+        // verify sha256
+        printf("[flux] verifying checksum...\n");
+        char sha_cmd[640];
+        snprintf(sha_cmd, sizeof(sha_cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", tarball);
+        system(sha_cmd);
+        FILE *f = fopen("/tmp/flux_hash_actual", "r");
+        if (!f) return FLUX_ERR_GENERAL;
+        char actual[65] = {0};
+        fread(actual, 1, 64, f);
+        fclose(f);
+        remove("/tmp/flux_hash_actual");
+        if (strcmp(actual, recipe.sha256) != 0) {
+            fprintf(stderr, "flux: checksum mismatch\nexpected: %s\ngot:      %s\n",
+                    recipe.sha256, actual);
+            return FLUX_ERR_GENERAL;
+        }
+
+        // extract
+        printf("[flux] extracting...\n");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", build_dir, build_dir, tarball, build_dir);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "flux: failed to extract tarball\n");
+            return FLUX_ERR_GENERAL;
+        }
+    } else {
+        snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", build_dir);
+        system(cmd);
     }
 
     // run hooks
     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
     system(cmd);
 
-    if (cross) {
+    if (!is_meta && cross) {
         char patch_cmd[FLUX_MAX_PATH_LEN * 2];
         snprintf(patch_cmd, sizeof(patch_cmd),
             "find \"%s\" -name configure -type f"
@@ -136,6 +143,10 @@ int flux_build(int argc, char **argv, const char *usage) {
         system(patch_cmd);
     }
 
+    // recipe dir exposed to hooks as FLUX_RECIPE_DIR
+    char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
+
     // helper: write and run a hook script
     #define RUN_HOOK(hook, label) do { \
         if (strlen(hook) > 0) { \
@@ -144,6 +155,7 @@ int flux_build(int argc, char **argv, const char *usage) {
             FILE *_f = fopen(_script, "w"); \
             if (!_f) return FLUX_ERR_GENERAL; \
             fprintf(_f, "#!/bin/sh\nset -e\ncd \"%s\"\nexport DESTDIR=\"%s\"\n", build_dir, destdir); \
+            fprintf(_f, "export FLUX_RECIPE_DIR=\"%s\"\n", recipe_dir); \
             if (cross) { \
                 fprintf(_f, "export PATH=\"%s:/usr/local/bin:/usr/bin:/bin:$PATH\"\n", config.flux_cross_toolchain_path); \
                 fprintf(_f, "export CC=\"%sgcc\"\n", config.flux_cross_compile_prefix); \
@@ -173,16 +185,18 @@ int flux_build(int argc, char **argv, const char *usage) {
         } \
     } while(0)
 
-    printf("[flux] running pre-build...\n");
-    RUN_HOOK(recipe.hook_pre_build, "pre-build");
-    printf("[flux] building...\n");
-    RUN_HOOK(recipe.hook_build, "build");
-    printf("[flux] running post-build...\n");
-    RUN_HOOK(recipe.hook_post_build, "post-build");
+    if (!is_meta) {
+        printf("[flux] running pre-build...\n");
+        RUN_HOOK(recipe.hook_pre_build, "pre-build");
+        printf("[flux] building...\n");
+        RUN_HOOK(recipe.hook_build, "build");
+        printf("[flux] running post-build...\n");
+        RUN_HOOK(recipe.hook_post_build, "post-build");
+    }
     printf("[flux] installing to destdir...\n");
     RUN_HOOK(recipe.hook_install, "install");
 
-    if (cross && strlen(config.flux_cross_compile_sysroot) > 0) {
+    if (!is_meta && cross && strlen(config.flux_cross_compile_sysroot) > 0) {
         char sysroot_cmd[FLUX_MAX_PATH_LEN * 2 + 32];
         snprintf(sysroot_cmd, sizeof(sysroot_cmd), "cp -a \"%s\"/. \"%s\"/", destdir, config.flux_cross_compile_sysroot);
         system(sysroot_cmd);
