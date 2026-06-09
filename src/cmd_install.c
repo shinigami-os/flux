@@ -186,7 +186,9 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     printf("[flux] %s version %s\n", recipe.name, recipe.version);
 
-    // check binary cache
+    int is_meta = (strlen(recipe.url) == 0);
+
+    // check binary cache (skip for meta-packages — nothing to cache)
     char destdir[256];
     snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-destdir", pkg);
     char cache_key[256];
@@ -194,25 +196,31 @@ int flux_install(int argc, char **argv, const char *usage) {
     char cache_path[FLUX_MAX_PATH_LEN];
     int cache_hit = 0;
 
-    if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config.package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
-        if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
-            printf("[flux] cache hit: %s\n", cache_path);
-            if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
-                char cmd[1024];
-                snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && zstd -d \"%s\" -o /tmp/flux_cache_extract.tar && tar -C \"%s\" -xf /tmp/flux_cache_extract.tar && rm /tmp/flux_cache_extract.tar", destdir, cache_path, destdir);
-                if (system(cmd) == 0)
-                    cache_hit = 1;
+    if (!is_meta) {
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config.package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+            if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
+                printf("[flux] cache hit: %s\n", cache_path);
+                if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && zstd -d \"%s\" -o /tmp/flux_cache_extract.tar && tar -C \"%s\" -xf /tmp/flux_cache_extract.tar && rm /tmp/flux_cache_extract.tar", destdir, cache_path, destdir);
+                    if (system(cmd) == 0)
+                        cache_hit = 1;
+                }
+                if (!cache_hit)
+                    printf("[flux] cache verification failed, falling back to source\n");
+            } else {
+                printf("[flux] cache miss, building from source\n");
             }
-            if (!cache_hit)
-                printf("[flux] cache verification failed, falling back to source\n");
         } else {
-            printf("[flux] cache miss, building from source\n");
+            printf("[flux] cache key generation failed, building from source\n");
         }
-    } else {
-        printf("[flux] cache key generation failed, building from source\n");
     }
 
-    // dep resolution: runtime-only on cache hit, full (runtime+build) on cache miss
+    // dep resolution:
+    //   meta-package  → runtime deps only (no build tools needed)
+    //   cache hit     → runtime deps only
+    //   cache miss    → runtime + build deps
+    int resolve_build_deps = !is_meta && !cache_hit;
     if (!g_auto_installed) {
         flux_install_queue_t queue;
         memset(&queue, 0, sizeof(queue));
@@ -220,7 +228,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         memset(visited, 0, sizeof(visited));
         int visited_count = 0;
 
-        int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count, !cache_hit);
+        int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count, resolve_build_deps);
         if (err2 != FLUX_ERR_NONE) return err2;
 
         if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
@@ -265,7 +273,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     // install from cache
     if (cache_hit) {
         char cmd[512];
-        snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
+        snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | tar -C / --keep-directory-symlink -xf -", destdir);
         if (system(cmd) != 0) {
             fprintf(stderr, "flux: failed to copy cached files to system\n");
             return FLUX_ERR_GENERAL;
@@ -291,6 +299,21 @@ int flux_install(int argc, char **argv, const char *usage) {
         system(cleanup);
 
         printf("[flux] %s installed successfully (from cache)\n", pkg);
+        return FLUX_ERR_NONE;
+    }
+
+    // meta-package: no source, no files to install — just dep registration above
+    if (is_meta) {
+        flux_pkg_info_t info;
+        memset(&info, 0, sizeof(info));
+        strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
+        strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
+        time_t now_m = time(NULL);
+        struct tm *t_m = localtime(&now_m);
+        strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t_m);
+        info.auto_installed = g_auto_installed;
+        flux_db_register(&info, NULL, 0);
+        printf("[flux] %s installed successfully (meta-package)\n", pkg);
         return FLUX_ERR_NONE;
     }
 
@@ -354,7 +377,7 @@ int flux_install(int argc, char **argv, const char *usage) {
             return FLUX_ERR_BUILD;
         }
 
-        snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
+        snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | tar -C / --keep-directory-symlink -xf -", destdir);
         if (system(cmd) != 0) {
             fprintf(stderr, "flux: failed to copy files to system\n");
             return FLUX_ERR_GENERAL;
