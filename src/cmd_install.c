@@ -50,14 +50,14 @@ static int extract_tarball(const char *tarball, const char *dest) {
     return system(cmd);
 }
 
-static int run_hook(const char *hook, const char *build_dir, const char *destdir) {
+static int run_hook(const char *hook, const char *build_dir, const char *destdir, const char *recipe_dir) {
     if (strlen(hook) == 0) return 0;
 
     char script_path[256];
     snprintf(script_path, sizeof(script_path), "%s/.flux_hook.sh", build_dir);
     FILE *f = fopen(script_path, "w");
     if (!f) return FLUX_ERR_GENERAL;
-    fprintf(f, "#!/bin/sh\nset -e\ncd \"%s\"\nexport DESTDIR=\"%s\"\n%s\n", build_dir, destdir, hook);
+    fprintf(f, "#!/bin/sh\nset -e\ncd \"%s\"\nexport DESTDIR=\"%s\"\nexport FLUX_RECIPE_DIR=\"%s\"\n%s\n", build_dir, destdir, recipe_dir, hook);
     fclose(f);
     chmod(script_path, 0755);
 
@@ -204,9 +204,15 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     printf("[flux] %s version %s\n", recipe.name, recipe.version);
 
-    int is_meta = (strlen(recipe.url) == 0);
+    int has_source = (strlen(recipe.url) != 0);
+    int has_install_hook = (strlen(recipe.hook_install) != 0);
+    // pure meta-package: no source to fetch and no install hook to run -- truly nothing to do
+    // beyond dependency registration. A package with an empty [source] but a real %install
+    // (e.g. one that ships runit services or config files) still needs the full build/cache
+    // pipeline below, just without a tarball to fetch.
+    int pure_meta = !has_source && !has_install_hook;
 
-    // check binary cache (skip for meta-packages : nothing to cache)
+    // check binary cache (skip for pure meta-packages : nothing to cache)
     char destdir[256];
     snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-destdir", pkg);
     char cache_key[256];
@@ -214,7 +220,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     char cache_path[FLUX_MAX_PATH_LEN];
     int cache_hit = 0;
 
-    if (!is_meta) {
+    if (!pure_meta) {
         if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config.package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
                 printf("[flux] cache hit: %s\n", cache_path);
@@ -235,10 +241,10 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
 
     // dep resolution:
-    //   meta-package  -> runtime deps only (no build tools needed)
-    //   cache hit     -> runtime deps only
-    //   cache miss    -> runtime + build deps
-    int resolve_build_deps = !is_meta && !cache_hit;
+    //   pure meta-package -> runtime deps only (no build tools needed)
+    //   cache hit         -> runtime deps only
+    //   cache miss        -> runtime + build deps
+    int resolve_build_deps = !pure_meta && !cache_hit;
     if (!g_auto_installed) {
         flux_install_queue_t queue;
         memset(&queue, 0, sizeof(queue));
@@ -318,8 +324,8 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    // meta-package: no source, no files to install : just dep registration above
-    if (is_meta) {
+    // pure meta-package: no source, no install hook : just dep registration above
+    if (pure_meta) {
         flux_pkg_info_t info;
         memset(&info, 0, sizeof(info));
         strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
@@ -343,11 +349,14 @@ int flux_install(int argc, char **argv, const char *usage) {
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
     snprintf(tarball,   sizeof(tarball),   "/tmp/flux-build/%s.tar.gz", pkg);
 
-    if (strlen(recipe.url) != 0) {
-        char cmd[512];
-        snprintf(cmd, sizeof(cmd), "mkdir -p /tmp/flux-build");
-        system(cmd);
+    char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
 
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "mkdir -p /tmp/flux-build");
+    system(cmd);
+
+    if (has_source) {
         printf("[flux] fetching source: %s\n", recipe.url);
         if (fetch_source(recipe.url, tarball) != 0) {
             fprintf(stderr, "flux: failed to fetch source\n");
@@ -365,41 +374,44 @@ int flux_install(int argc, char **argv, const char *usage) {
             fprintf(stderr, "flux: failed to extract tarball\n");
             return FLUX_ERR_GENERAL;
         }
-
-        snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
+    } else {
+        snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", build_dir);
         system(cmd);
-
-        printf("[flux] running pre-build...\n");
-        if (run_hook(recipe.hook_pre_build, build_dir, destdir) != 0) {
-            fprintf(stderr, "flux: pre-build failed\n");
-            return FLUX_ERR_BUILD;
-        }
-
-        printf("[flux] building...\n");
-        if (run_hook(recipe.hook_build, build_dir, destdir) != 0) {
-            fprintf(stderr, "flux: build failed\n");
-            return FLUX_ERR_BUILD;
-        }
-
-        printf("[flux] running post-build...\n");
-        if (run_hook(recipe.hook_post_build, build_dir, destdir) != 0) {
-            fprintf(stderr, "flux: post-build failed\n");
-            return FLUX_ERR_BUILD;
-        }
-
-        printf("[flux] installing files...\n");
-        if (run_hook(recipe.hook_install, build_dir, destdir) != 0) {
-            fprintf(stderr, "flux: install hook failed\n");
-            return FLUX_ERR_BUILD;
-        }
-
-        if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
-            fprintf(stderr, "flux: failed to copy files to system\n");
-            return FLUX_ERR_GENERAL;
-        }
-
-        collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
     }
+
+    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
+    system(cmd);
+
+    printf("[flux] running pre-build...\n");
+    if (run_hook(recipe.hook_pre_build, build_dir, destdir, recipe_dir) != 0) {
+        fprintf(stderr, "flux: pre-build failed\n");
+        return FLUX_ERR_BUILD;
+    }
+
+    printf("[flux] building...\n");
+    if (run_hook(recipe.hook_build, build_dir, destdir, recipe_dir) != 0) {
+        fprintf(stderr, "flux: build failed\n");
+        return FLUX_ERR_BUILD;
+    }
+
+    printf("[flux] running post-build...\n");
+    if (run_hook(recipe.hook_post_build, build_dir, destdir, recipe_dir) != 0) {
+        fprintf(stderr, "flux: post-build failed\n");
+        return FLUX_ERR_BUILD;
+    }
+
+    printf("[flux] installing files...\n");
+    if (run_hook(recipe.hook_install, build_dir, destdir, recipe_dir) != 0) {
+        fprintf(stderr, "flux: install hook failed\n");
+        return FLUX_ERR_BUILD;
+    }
+
+    if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
+        fprintf(stderr, "flux: failed to copy files to system\n");
+        return FLUX_ERR_GENERAL;
+    }
+
+    collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
 
     // register in package db
     flux_pkg_info_t info;
