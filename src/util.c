@@ -216,9 +216,7 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
 }
 
 int flux_cache_store(const char *key, const char *destdir, const char *secret_key_path) {
-    // no signing key on this machine (e.g. inside an installer chroot or a target
-    // system) -- there's nothing to sign with, so skip caching entirely instead of
-    // building an archive we can't sign and leaving an orphaned, unsigned .tar.zst behind
+    // no signing key on this machine
     if (access(secret_key_path, R_OK) != 0) {
         printf("[flux] no signing key at %s, skipping cache store\n", secret_key_path);
         return FLUX_ERR_NONE;

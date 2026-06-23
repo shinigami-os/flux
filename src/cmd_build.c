@@ -57,26 +57,27 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     int is_meta = (strlen(recipe.url) == 0);
 
-    // compute cache key
-    char cache_key[256];
-    memset(cache_key, 0, sizeof(cache_key));
-    const char *cross_target = cross ? "x86_64-linux-musl" : config.package_target;
-    if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cross_target, cache_key, sizeof(cache_key)) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to compute cache key\n");
-        return FLUX_ERR_GENERAL;
-    }
-
-    // check if already cached
-    char cache_path[FLUX_MAX_PATH_LEN];
-    if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
-        printf("[flux] %s is already cached at %s\n", pkg, cache_path);
-        return FLUX_ERR_NONE;
-    }
-
-    // pure meta-package: no source and no install hook — nothing to do
+    // pure meta-package: no source and no install hook — nothing to do at all.
+    // Checked before any cache lookup since meta-packages never touch the cache.
     if (is_meta && strlen(recipe.hook_install) == 0) {
         printf("[flux] %s is a meta-package, nothing to build\n", pkg);
         return FLUX_ERR_NONE;
+    }
+
+    char cache_key[256];
+    memset(cache_key, 0, sizeof(cache_key));
+    char cache_path[FLUX_MAX_PATH_LEN];
+    if (!is_meta) {
+        const char *cross_target = cross ? "x86_64-linux-musl" : config.package_target;
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cross_target, cache_key, sizeof(cache_key)) != FLUX_ERR_NONE) {
+            fprintf(stderr, "flux: failed to compute cache key\n");
+            return FLUX_ERR_GENERAL;
+        }
+
+        if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
+            printf("[flux] %s is already cached at %s\n", pkg, cache_path);
+            return FLUX_ERR_NONE;
+        }
     }
 
     char build_dir[256];
@@ -217,11 +218,13 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     #undef RUN_HOOK
 
-    // store in cache
-    printf("[flux] caching...\n");
-    if (flux_cache_store(cache_key, destdir, config.flux_secret_key_path) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to store in cache\n");
-        return FLUX_ERR_CACHE;
+    // store in cache (meta-packages never reach here as cacheable -- see above)
+    if (!is_meta) {
+        printf("[flux] caching...\n");
+        if (flux_cache_store(cache_key, destdir, config.flux_secret_key_path) != FLUX_ERR_NONE) {
+            fprintf(stderr, "flux: failed to store in cache\n");
+            return FLUX_ERR_CACHE;
+        }
     }
 
     // cleanup

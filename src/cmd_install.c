@@ -50,9 +50,7 @@ static int extract_tarball(const char *tarball, const char *dest) {
     return system(cmd);
 }
 
-// runs only against the real root filesystem -- never DESTDIR-staged, never
-// invoked from cmd_build.c. Intended for idempotent system-level mutations
-// (e.g. creating a system user) that can't be expressed as files to package.
+// runs only against the real root filesystem
 static int run_post_install_hook(const char *hook, const char *recipe_dir) {
     if (strlen(hook) == 0) return 0;
 
@@ -117,18 +115,17 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         return FLUX_ERR_DEPENDENCY;
     }
 
-    // decide whether THIS package needs its own build deps pulled in: a pure
-    // meta-package never builds from source, and a package with a binary cache
-    // hit (local or remote) will be installed pre-built, so neither needs its
-    // build toolchain dragged into the queue. Only an actual cache-miss source
-    // build does. This must be evaluated per-package, not inherited from
-    // whatever caused the top-level package to need building.
+    // decide whether THIS package needs its own build deps pulled in.
     int has_source = (strlen(recipe.url) != 0);
     int has_install_hook = (strlen(recipe.hook_install) != 0);
     int pure_meta = !has_source && !has_install_hook;
 
     int needs_build_deps = 0;
-    if (!pure_meta) {
+    if (pure_meta) {
+        needs_build_deps = 0;
+    } else if (!has_source) {
+        needs_build_deps = 1;
+    } else {
         char cache_key[256];
         char cache_path[FLUX_MAX_PATH_LEN];
         memset(cache_key, 0, sizeof(cache_key));
@@ -253,14 +250,11 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     int has_source = (strlen(recipe.url) != 0);
     int has_install_hook = (strlen(recipe.hook_install) != 0);
-    // pure meta-package: no source to fetch and no install hook to run -- nothing to build
-    // or cache. A package with an empty [source] but a real %install (e.g. one that ships
-    // runit services or config files) still needs the full build/cache pipeline below, just
-    // without a tarball to fetch. A %post-install hook runs separately either way (see below)
-    // since it's not something that gets cached -- it's a live mutation of the real system.
+    // pure meta-package: no source to fetch and no install hook to run
     int pure_meta = !has_source && !has_install_hook;
 
-    // check binary cache (skip for pure meta-packages : nothing to cache)
+    // meta-packages (empty [source]) are just dependency lists, optionally with trivial
+    // file-drop install steps
     char destdir[256];
     snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-destdir", pkg);
     char cache_key[256];
@@ -268,7 +262,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     char cache_path[FLUX_MAX_PATH_LEN];
     int cache_hit = 0;
 
-    if (!pure_meta) {
+    if (has_source) {
         if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config.package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
                 printf("[flux] cache hit: %s\n", cache_path);
@@ -288,10 +282,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
     }
 
-    // dep resolution is now done per-package inside collect_deps: each dependency in
-    // the tree gets its own pure-meta/cache-hit check to decide whether its build
-    // deps are needed, rather than inheriting this package's status across the
-    // whole tree.
+    // dep resolution is now done per-package inside collect_deps
     if (!g_auto_installed) {
         flux_install_queue_t queue;
         memset(&queue, 0, sizeof(queue));
@@ -377,8 +368,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
 
     // pure meta-package: no source, no install hook : just dep registration plus
-    // an optional post-install hook (e.g. a package whose only job is to create a
-    // system user, with nothing to actually package)
+    // an optional post-install hook 
     if (pure_meta) {
         if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
             fprintf(stderr, "flux: post-install failed\n");
