@@ -15,6 +15,7 @@ typedef enum {
     KOTO_HOOK_BUILD,
     KOTO_HOOK_POST_BUILD,
     KOTO_HOOK_INSTALL,
+    KOTO_HOOK_POST_INSTALL,
 } koto_state_t;
 
 #endif

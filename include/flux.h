@@ -71,6 +71,11 @@ typedef struct {
     char hook_build[FLUX_MAX_HOOK_LEN];
     char hook_post_build[FLUX_MAX_HOOK_LEN];
     char hook_install[FLUX_MAX_HOOK_LEN];
+    // runs only during `flux install`, against the real root filesystem (never
+    // DESTDIR-staged, never invoked by `flux build`). For idempotent system-level
+    // mutations that can't be expressed as files to package, e.g. creating a
+    // system user. See cmd_install.c.
+    char hook_post_install[FLUX_MAX_HOOK_LEN];
 }flux_recipe_t;
 
 typedef struct {

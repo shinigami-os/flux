@@ -50,6 +50,28 @@ static int extract_tarball(const char *tarball, const char *dest) {
     return system(cmd);
 }
 
+// runs only against the real root filesystem -- never DESTDIR-staged, never
+// invoked from cmd_build.c. Intended for idempotent system-level mutations
+// (e.g. creating a system user) that can't be expressed as files to package.
+static int run_post_install_hook(const char *hook, const char *recipe_dir) {
+    if (strlen(hook) == 0) return 0;
+
+    printf("[flux] running post-install...\n");
+    system("mkdir -p /tmp/flux-build");
+    const char *script_path = "/tmp/flux-build/.flux_post_install.sh";
+    FILE *f = fopen(script_path, "w");
+    if (!f) return FLUX_ERR_GENERAL;
+    fprintf(f, "#!/bin/sh\nset -e\nexport FLUX_RECIPE_DIR=\"%s\"\n%s\n", recipe_dir, hook);
+    fclose(f);
+    chmod(script_path, 0755);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "sh \"%s\"", script_path);
+    int ret = system(cmd);
+    remove(script_path);
+    return ret;
+}
+
 static int run_hook(const char *hook, const char *build_dir, const char *destdir, const char *recipe_dir) {
     if (strlen(hook) == 0) return 0;
 
@@ -226,12 +248,16 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     printf("[flux] %s version %s\n", recipe.name, recipe.version);
 
+    char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
+
     int has_source = (strlen(recipe.url) != 0);
     int has_install_hook = (strlen(recipe.hook_install) != 0);
-    // pure meta-package: no source to fetch and no install hook to run -- truly nothing to do
-    // beyond dependency registration. A package with an empty [source] but a real %install
-    // (e.g. one that ships runit services or config files) still needs the full build/cache
-    // pipeline below, just without a tarball to fetch.
+    // pure meta-package: no source to fetch and no install hook to run -- nothing to build
+    // or cache. A package with an empty [source] but a real %install (e.g. one that ships
+    // runit services or config files) still needs the full build/cache pipeline below, just
+    // without a tarball to fetch. A %post-install hook runs separately either way (see below)
+    // since it's not something that gets cached -- it's a live mutation of the real system.
     int pure_meta = !has_source && !has_install_hook;
 
     // check binary cache (skip for pure meta-packages : nothing to cache)
@@ -341,12 +367,24 @@ int flux_install(int argc, char **argv, const char *usage) {
         snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\"", destdir);
         system(cleanup);
 
+        if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
+            fprintf(stderr, "flux: post-install failed\n");
+            return FLUX_ERR_BUILD;
+        }
+
         printf("[flux] %s installed successfully (from cache)\n", pkg);
         return FLUX_ERR_NONE;
     }
 
-    // pure meta-package: no source, no install hook : just dep registration above
+    // pure meta-package: no source, no install hook : just dep registration plus
+    // an optional post-install hook (e.g. a package whose only job is to create a
+    // system user, with nothing to actually package)
     if (pure_meta) {
+        if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
+            fprintf(stderr, "flux: post-install failed\n");
+            return FLUX_ERR_BUILD;
+        }
+
         flux_pkg_info_t info;
         memset(&info, 0, sizeof(info));
         strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
@@ -369,9 +407,6 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
     snprintf(tarball,   sizeof(tarball),   "/tmp/flux-build/%s.tar.gz", pkg);
-
-    char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
-    snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
 
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "mkdir -p /tmp/flux-build");
@@ -451,6 +486,11 @@ int flux_install(int argc, char **argv, const char *usage) {
     char cleanup_cmd[1024];
     snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);
     system(cleanup_cmd);
+
+    if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
+        fprintf(stderr, "flux: post-install failed\n");
+        return FLUX_ERR_BUILD;
+    }
 
     printf("[flux] %s installed successfully\n", pkg);
     return FLUX_ERR_NONE;

@@ -31,6 +31,7 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
         if (strcmp(trimmed, "%build") == 0) { state = KOTO_HOOK_BUILD; continue; }
         if (strcmp(trimmed, "%post-build") == 0) { state = KOTO_HOOK_POST_BUILD; continue; }
         if (strcmp(trimmed, "%install") == 0) { state = KOTO_HOOK_INSTALL; continue; }
+        if (strcmp(trimmed, "%post-install") == 0) { state = KOTO_HOOK_POST_INSTALL; continue; }
 
         // hook content: append line to the right buffer
         if (state == KOTO_HOOK_PRE_BUILD) {
@@ -51,6 +52,11 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
         if (state == KOTO_HOOK_INSTALL) {
             strncat(recipe->hook_install, trimmed, FLUX_MAX_HOOK_LEN - strlen(recipe->hook_install) - 1);
             strncat(recipe->hook_install, "\n", FLUX_MAX_HOOK_LEN - strlen(recipe->hook_install) - 1);
+            continue;
+        }
+        if (state == KOTO_HOOK_POST_INSTALL) {
+            strncat(recipe->hook_post_install, trimmed, FLUX_MAX_HOOK_LEN - strlen(recipe->hook_post_install) - 1);
+            strncat(recipe->hook_post_install, "\n", FLUX_MAX_HOOK_LEN - strlen(recipe->hook_post_install) - 1);
             continue;
         }
 
