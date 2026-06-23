@@ -74,7 +74,7 @@ static int queue_contains(flux_install_queue_t *q, const char *name) {
     return 0;
 }
 
-static int collect_deps(const char *pkg, flux_config_t *config, flux_install_queue_t *queue, char visited[][FLUX_MAX_NAME_LEN], int *visited_count, int build) {
+static int collect_deps(const char *pkg, flux_config_t *config, flux_install_queue_t *queue, char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
     for (int i = 0; i < *visited_count; i++)
         if (strcmp(visited[i], pkg) == 0) return FLUX_ERR_NONE;
 
@@ -95,9 +95,31 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         return FLUX_ERR_DEPENDENCY;
     }
 
+    // decide whether THIS package needs its own build deps pulled in: a pure
+    // meta-package never builds from source, and a package with a binary cache
+    // hit (local or remote) will be installed pre-built, so neither needs its
+    // build toolchain dragged into the queue. Only an actual cache-miss source
+    // build does. This must be evaluated per-package, not inherited from
+    // whatever caused the top-level package to need building.
+    int has_source = (strlen(recipe.url) != 0);
+    int has_install_hook = (strlen(recipe.hook_install) != 0);
+    int pure_meta = !has_source && !has_install_hook;
+
+    int needs_build_deps = 0;
+    if (!pure_meta) {
+        char cache_key[256];
+        char cache_path[FLUX_MAX_PATH_LEN];
+        memset(cache_key, 0, sizeof(cache_key));
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config->package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+            needs_build_deps = (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) != FLUX_ERR_NONE);
+        } else {
+            needs_build_deps = 1;
+        }
+    }
+
     char (*lists[2])[FLUX_MAX_NAME_LEN] = { recipe.rdeps, NULL };
     int counts[2] = { FLUX_MAX_RDEPS, 0 };
-    if (build) {
+    if (needs_build_deps) {
         lists[1] = recipe.deps;
         counts[1] = FLUX_MAX_DEPS;
     }
@@ -106,7 +128,7 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         if (!lists[l]) continue;
         for (int i = 0; i < counts[l]; i++) {
             if (strlen(lists[l][i]) == 0) continue;
-            int err = collect_deps(lists[l][i], config, queue, visited, visited_count, build);
+            int err = collect_deps(lists[l][i], config, queue, visited, visited_count);
             if (err != FLUX_ERR_NONE) return err;
         }
     }
@@ -240,11 +262,10 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
     }
 
-    // dep resolution:
-    //   pure meta-package -> runtime deps only (no build tools needed)
-    //   cache hit         -> runtime deps only
-    //   cache miss        -> runtime + build deps
-    int resolve_build_deps = !pure_meta && !cache_hit;
+    // dep resolution is now done per-package inside collect_deps: each dependency in
+    // the tree gets its own pure-meta/cache-hit check to decide whether its build
+    // deps are needed, rather than inheriting this package's status across the
+    // whole tree.
     if (!g_auto_installed) {
         flux_install_queue_t queue;
         memset(&queue, 0, sizeof(queue));
@@ -252,7 +273,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         memset(visited, 0, sizeof(visited));
         int visited_count = 0;
 
-        int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count, resolve_build_deps);
+        int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count);
         if (err2 != FLUX_ERR_NONE) return err2;
 
         if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
