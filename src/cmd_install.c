@@ -44,12 +44,7 @@ static int verify_sha256(const char *path, const char *expected) {
     return 0;
 }
 
-// extracts a fetched upstream SOURCE tarball (.tar.gz/.tar.xz/.tar.bz2/...), not
-// to be confused with the binary cache archive format (always .tar.zst, extracted
-// inline where it's used). `tar -xf` auto-detects the compression format from the
-// file itself, and --strip-components=1 flattens the usual single top-level
-// name-version/ directory so build hooks land directly in build_dir, matching
-// cmd_build.c's extraction of the same kind of tarball.
+// extracts a fetched source tarball, auto-detects compression, strips the top dir
 static int extract_tarball(const char *tarball, const char *dest) {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", dest, dest, tarball, dest);
@@ -259,8 +254,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     // pure meta-package: no source to fetch and no install hook to run
     int pure_meta = !has_source && !has_install_hook;
 
-    // meta-packages (empty [source]) are just dependency lists, optionally with trivial
-    // file-drop install steps
+    // meta-packages never touch the binary cache
     char destdir[256];
     snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-destdir", pkg);
     char cache_key[256];
@@ -373,8 +367,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    // pure meta-package: no source, no install hook : just dep registration plus
-    // an optional post-install hook 
+    // pure meta-package: dep registration plus an optional post-install hook
     if (pure_meta) {
         if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
             fprintf(stderr, "flux: post-install failed\n");

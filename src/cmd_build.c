@@ -57,8 +57,7 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     int is_meta = (strlen(recipe.url) == 0);
 
-    // pure meta-package: no source and no install hook — nothing to do at all.
-    // Checked before any cache lookup since meta-packages never touch the cache.
+    // nothing to do, checked before any cache lookup
     if (is_meta && strlen(recipe.hook_install) == 0) {
         printf("[flux] %s is a meta-package, nothing to build\n", pkg);
         return FLUX_ERR_NONE;
@@ -218,7 +217,7 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     #undef RUN_HOOK
 
-    // store in cache (meta-packages never reach here as cacheable -- see above)
+    // store in cache (meta-packages never reach here)
     if (!is_meta) {
         printf("[flux] caching...\n");
         if (flux_cache_store(cache_key, destdir, config.flux_secret_key_path) != FLUX_ERR_NONE) {

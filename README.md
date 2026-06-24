@@ -8,11 +8,12 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 ## Design
 
 - **Reproducible builds.** Same recipe + same source = identical output.
-- **Binary cache.** Skip compilation when a valid signed binary exists on the cache server.
-- **Dependency-minimal.** Only explicit dependencies are installed. No recommended or suggested auto-installs.
-- **Transparent.** Every operation prints exactly what it is doing and why.
+- **Binary cache.** Skip compilation when a valid signed binary exists locally or on the remote cache server.
+- **Dependency-minimal.** Build deps are only pulled in for a package that actually needs to compile from source. A package with a cache hit, or a meta-package, never drags its build toolchain along.
+- **Transparent.** Every operation prints what it is doing and why.
 - **Scriptable.** Exit codes are stable and documented. flux works in shell scripts and CI pipelines.
 - **No runtime deps.** flux links only against libc. Nothing else required.
+- **Cross-compile aware.** `flux build --cross` builds against a configured cross sysroot instead of the host.
 
 ---
 
@@ -25,7 +26,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux update` | Sync the local recipe repo with the remote |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
-| `flux build <pkg>` | Force local compilation regardless of cache |
+| `flux build [--cross] <pkg>` | Force local compilation, optionally against the cross sysroot |
 | `flux cache <subcommand>` | Manage binary cache |
 | `flux compat <pkg>` | Install via Debian compat container (Phase 3) |
 
@@ -64,9 +65,21 @@ make
 
 %install
 make DESTDIR=$DESTDIR install
+
+%post-install
 ```
 
 flux sets `$DESTDIR` before running `%install`. Recipes install into `$DESTDIR`, flux copies to the live system.
+
+`%post-install` is a fifth, optional hook that runs only during `flux install`, never `flux build`, and operates directly on the real root filesystem instead of `$DESTDIR`. It exists for idempotent system-level mutations that can't be expressed as installed files, like creating a system user. Never write to `$DESTDIR` in this hook, absolute paths here mean the real system.
+
+### Meta-packages
+
+A recipe with an empty `[source]` is a meta-package: just a dependency list, optionally with a trivial `%install` (drop a few files) or `%post-install` (create a user). Meta-packages never touch the binary cache, local or remote. They re-run their hooks fresh on every build and install. Caching is only for real compiled artifacts from a fetched, checksummed source tree.
+
+### Hook environment
+
+Every hook gets `DESTDIR` and `FLUX_RECIPE_DIR` (the recipe's own directory, useful for referencing `files/`). During `flux build --cross`, hooks also get `CC`, `CXX`, `AR`, `LD`, `STRIP`, `CPP`, `CROSS_COMPILE`, `FLUX_CROSS_HOST`, and `FLUX_CROSS_SYSROOT`, plus `PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR`/`PKG_CONFIG_SYSROOT_DIR` pointed at the cross sysroot.
 
 ---
 
@@ -77,9 +90,18 @@ flux reads `/etc/flux/flux.conf` at startup:
 ```ini
 local_repo_path = /var/lib/flux/recipes
 remote_repo_url = https://github.com/shinigami-os/flux-recipes
-binary_cache_url = https://github.com/shinigami-os/flux-cache
+binary_cache_url = https://cache.example.com
 default_build_flags = -O2 -pipe -march=x86-64-v2
+flux_pub_path = /etc/flux/flux.pub
+flux_secret_key_path = /home/user/.minisign/flux.key
+cross_compile_prefix = x86_64-linux-musl-
+cross_compile_sysroot = /opt/musl-cross/x86_64-linux-musl
+cross_toolchain_path = /opt/musl-cross/bin
+cross_gcc_libpath = /opt/musl-cross/lib/gcc/x86_64-linux-musl/9.4.0
+package_target = x86_64-linux-musl
 ```
+
+`flux_secret_key_path` only needs to exist on a machine that publishes packages. If it's missing, `flux build`/`flux install` skip cache signing and storage instead of failing.
 
 ---
 
@@ -129,7 +151,7 @@ Exit codes are stable. They will not be renumbered.
 
 ## Status
 
-Phase 1 complete. `install`, `remove`, `search`, `update`, `info`, `build` are fully working against a local recipe repo. Binary cache and dependency resolution are stubbed; implemented in Phase 2.
+Phase 2. `install`, `remove`, `search`, `update`, `info`, `build` are fully working, including cross-compilation, real per-package dependency resolution, and a local + remote binary cache. `compat` (Phase 3) is not yet implemented.
 
 See the [Kira Linux specification](https://github.com/shinigami-os) and the full project roadmap.
 
