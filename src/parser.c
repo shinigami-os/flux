@@ -91,20 +91,26 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
             if (strcmp(key, "build") == 0) {
                 char tmp[512];
                 strncpy(tmp, val, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
                 char *tok = strtok(tmp, " ");
                 while (tok && bdep_i < FLUX_MAX_DEPS) {
                     strncpy(recipe->deps[bdep_i++], tok, FLUX_MAX_NAME_LEN - 1);
                     tok = strtok(NULL, " ");
                 }
+                if (tok)
+                    fprintf(stderr, "flux: warning: '%s' has more than %d build deps, '%s' and later were dropped -- raise FLUX_MAX_DEPS\n", recipe->name, FLUX_MAX_DEPS, tok);
             }
             if (strcmp(key, "runtime") == 0) {
                 char tmp[512];
                 strncpy(tmp, val, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
                 char *tok = strtok(tmp, " ");
                 while (tok && rdep_i < FLUX_MAX_RDEPS) {
                     strncpy(recipe->rdeps[rdep_i++], tok, FLUX_MAX_NAME_LEN - 1);
                     tok = strtok(NULL, " ");
                 }
+                if (tok)
+                    fprintf(stderr, "flux: warning: '%s' has more than %d runtime deps, '%s' and later were dropped -- raise FLUX_MAX_RDEPS\n", recipe->name, FLUX_MAX_RDEPS, tok);
             }
         }
     }

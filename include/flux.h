@@ -16,8 +16,8 @@
 #define FLUX_ERR_KOTODAMA 11 // malformed Kotodama file
 
 
-#define FLUX_MAX_DEPS        20
-#define FLUX_MAX_RDEPS       10
+#define FLUX_MAX_DEPS        64
+#define FLUX_MAX_RDEPS       64
 #define FLUX_MAX_NAME_LEN    64
 #define FLUX_MAX_HOOK_LEN    4096
 #define FLUX_MAX_VERSION_LEN 32
