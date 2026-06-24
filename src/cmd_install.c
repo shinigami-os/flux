@@ -44,9 +44,15 @@ static int verify_sha256(const char *path, const char *expected) {
     return 0;
 }
 
+// extracts a fetched upstream SOURCE tarball (.tar.gz/.tar.xz/.tar.bz2/...), not
+// to be confused with the binary cache archive format (always .tar.zst, extracted
+// inline where it's used). `tar -xf` auto-detects the compression format from the
+// file itself, and --strip-components=1 flattens the usual single top-level
+// name-version/ directory so build hooks land directly in build_dir, matching
+// cmd_build.c's extraction of the same kind of tarball.
 static int extract_tarball(const char *tarball, const char *dest) {
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && zstd -d \"%s\" -o /tmp/flux_cache_extract.tar && tar -C \"%s\" -xf /tmp/flux_cache_extract.tar && rm /tmp/flux_cache_extract.tar", dest, tarball, dest);
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", dest, dest, tarball, dest);
     return system(cmd);
 }
 
