@@ -4,10 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../include/util.h"
+#include "../include/parser.h"
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dirent.h>
+#include <stdarg.h>
 
 void flux_usage_error(const char *usage){
     printf("usage: %s\n", usage);
@@ -262,4 +265,186 @@ int flux_cache_verify(const char *path, const char *pub_path) {
         return FLUX_ERR_CACHE;
     }
     return FLUX_ERR_NONE;
+}
+
+int flux_db_read_info(const char *name, flux_pkg_info_t *info) {
+    char path[FLUX_MAX_PATH_LEN + 8];
+    snprintf(path, sizeof(path), "/var/lib/flux/installed/%s/info", name);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return FLUX_ERR_NOT_FOUND;
+
+    memset(info, 0, sizeof(*info));
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        strip_newline(line);
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *key = line;
+        char *val = eq + 1;
+        trim_right(key);
+        val = trim_left(val);
+
+        if (strcmp(key, "name") == 0) strncpy(info->name, val, FLUX_MAX_NAME_LEN - 1);
+        if (strcmp(key, "version") == 0) strncpy(info->version, val, FLUX_MAX_VERSION_LEN - 1);
+        if (strcmp(key, "install_date") == 0) strncpy(info->install_date, val, sizeof(info->install_date) - 1);
+        if (strcmp(key, "auto_installed") == 0) info->auto_installed = atoi(val);
+    }
+    fclose(f);
+    return FLUX_ERR_NONE;
+}
+
+int flux_db_set_auto_installed(const char *name, int auto_installed) {
+    flux_pkg_info_t info;
+    if (flux_db_read_info(name, &info) != FLUX_ERR_NONE) return FLUX_ERR_NOT_FOUND;
+    if (info.auto_installed == auto_installed) return FLUX_ERR_NONE;
+    info.auto_installed = auto_installed;
+
+    char path[FLUX_MAX_PATH_LEN + 8];
+    snprintf(path, sizeof(path), "/var/lib/flux/installed/%s/info", name);
+    FILE *f = fopen(path, "w");
+    if (!f) return FLUX_ERR_GENERAL;
+    fprintf(f, "name = %s\n", info.name);
+    fprintf(f, "version = %s\n", info.version);
+    fprintf(f, "install_date = %s\n", info.install_date);
+    fprintf(f, "auto_installed = %d\n", info.auto_installed);
+    fclose(f);
+    return FLUX_ERR_NONE;
+}
+
+int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    *count = 0;
+    DIR *d = opendir("/var/lib/flux/installed");
+    if (!d) return FLUX_ERR_NONE;
+
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && *count < max) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        strncpy(names[*count], e->d_name, FLUX_MAX_NAME_LEN - 1);
+        (*count)++;
+    }
+    closedir(d);
+    return FLUX_ERR_NONE;
+}
+
+int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const flux_config_t *config) {
+    char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, recipe_name);
+
+    flux_recipe_t recipe;
+    memset(&recipe, 0, sizeof(recipe));
+    if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return 0;
+
+    for (int i = 0; i < FLUX_MAX_DEPS; i++)
+        if (strcmp(recipe.deps[i], dep_name) == 0) return 1;
+    for (int i = 0; i < FLUX_MAX_RDEPS; i++)
+        if (strcmp(recipe.rdeps[i], dep_name) == 0) return 1;
+    return 0;
+}
+
+int flux_autoremove_orphans(int *removed_count) {
+    *removed_count = 0;
+
+    flux_config_t config;
+    memset(&config, 0, sizeof(config));
+    if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
+
+    // repeat until a full pass removes nothing, so a chain of
+    // now-orphaned auto-installed deps gets cleaned up in one call
+    for (int pass = 0; pass < 50; pass++) {
+        char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+        int count = 0;
+        flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &count);
+
+        int removed_this_pass = 0;
+        for (int i = 0; i < count; i++) {
+            flux_pkg_info_t info;
+            if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
+            if (!info.auto_installed) continue;
+
+            int needed = 0;
+            for (int j = 0; j < count; j++) {
+                if (j == i) continue;
+                if (flux_recipe_depends_on(names[j], names[i], &config)) { needed = 1; break; }
+            }
+            if (needed) continue;
+
+            printf("[flux] removing orphaned dependency: %s\n", names[i]);
+            flux_db_remove(names[i]);
+            (*removed_count)++;
+            removed_this_pass++;
+        }
+        if (removed_this_pass == 0) break;
+    }
+    return FLUX_ERR_NONE;
+}
+
+int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen) {
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "git ls-remote --tags --refs \"%s\" > /tmp/flux_git_tags_raw 2>/dev/null", repo_url);
+    if (system(cmd) != 0) {
+        remove("/tmp/flux_git_tags_raw");
+        return FLUX_ERR_NETWORK;
+    }
+
+    system("sed 's#.*refs/tags/##' /tmp/flux_git_tags_raw | sort -V | tail -1 > /tmp/flux_latest_tag");
+    remove("/tmp/flux_git_tags_raw");
+
+    FILE *f = fopen("/tmp/flux_latest_tag", "r");
+    if (!f) return FLUX_ERR_NETWORK;
+    if (!fgets(out, outlen, f)) {
+        fclose(f);
+        remove("/tmp/flux_latest_tag");
+        return FLUX_ERR_NOT_FOUND;
+    }
+    fclose(f);
+    remove("/tmp/flux_latest_tag");
+    strip_newline(out);
+    if (strlen(out) == 0) return FLUX_ERR_NOT_FOUND;
+    return FLUX_ERR_NONE;
+}
+
+int flux_colors_enabled(void) {
+    static int checked = 0;
+    static int enabled = 0;
+    if (!checked) {
+        enabled = isatty(STDOUT_FILENO) && getenv("NO_COLOR") == NULL;
+        checked = 1;
+    }
+    return enabled;
+}
+
+static void flux_vlog(FILE *stream, const char *color, const char *fmt, va_list ap) {
+    if (flux_colors_enabled()) fprintf(stream, "%s", color);
+    vfprintf(stream, fmt, ap);
+    if (flux_colors_enabled()) fprintf(stream, "\033[0m");
+}
+
+void flux_log(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    flux_vlog(stdout, "\033[36m", fmt, ap);
+    va_end(ap);
+}
+
+void flux_ok(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    flux_vlog(stdout, "\033[32m", fmt, ap);
+    va_end(ap);
+}
+
+void flux_warn(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    flux_vlog(stdout, "\033[33m", fmt, ap);
+    va_end(ap);
+}
+
+void flux_err(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    flux_vlog(stderr, "\033[31m", fmt, ap);
+    va_end(ap);
 }

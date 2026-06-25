@@ -1,6 +1,10 @@
 #ifndef FLUX_H
 #define FLUX_H
 
+// release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
+#define FLUX_VERSION "26.06"
+#define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
+#define KIRA_BASE_REPO_URL "https://github.com/shinigami-os/kira-base"
 
 #define FLUX_ERR_NONE 0 // success
 #define FLUX_ERR_GENERAL 1 // general unrecoverable error

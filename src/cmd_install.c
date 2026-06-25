@@ -104,8 +104,6 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         (*visited_count)++;
     }
 
-    if (flux_db_is_installed(pkg)) return FLUX_ERR_NONE;
-
     char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg);
 
@@ -116,8 +114,12 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         return FLUX_ERR_DEPENDENCY;
     }
 
-    // decide whether THIS package needs its own build deps pulled in.
     int has_source = (strlen(recipe.url) != 0);
+
+    // meta-packages are never marked installed, always walked fresh
+    if (has_source && flux_db_is_installed(pkg)) return FLUX_ERR_NONE;
+
+    // decide whether THIS package needs its own build deps pulled in.
     int has_install_hook = (strlen(recipe.hook_install) != 0);
     int pure_meta = !has_source && !has_install_hook;
 
@@ -219,11 +221,6 @@ int flux_install(int argc, char **argv, const char *usage) {
     int err = flux_load_config(&config);
     if (err != FLUX_ERR_NONE) return err;
 
-    if (flux_db_is_installed(pkg)) {
-        printf("[flux] %s is already installed\n", pkg);
-        return FLUX_ERR_NONE;
-    }
-
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
         fprintf(stderr, "flux: recipe repo not found at %s\n", config.local_repo_path);
@@ -253,6 +250,14 @@ int flux_install(int argc, char **argv, const char *usage) {
     int has_install_hook = (strlen(recipe.hook_install) != 0);
     // pure meta-package: no source to fetch and no install hook to run
     int pure_meta = !has_source && !has_install_hook;
+
+    // meta-packages are never marked installed, they're a list to process,
+    // always re-walked so their deps and hooks can pick up changes.
+    if (has_source && flux_db_is_installed(pkg)) {
+        if (!g_auto_installed) flux_db_set_auto_installed(pkg, 0);
+        printf("[flux] %s is already installed\n", pkg);
+        return FLUX_ERR_NONE;
+    }
 
     // meta-packages never touch the binary cache
     char destdir[256];

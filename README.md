@@ -22,13 +22,17 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | Command | Action |
 |---|---|
 | `flux install <pkg>` | Install a package (from cache or compile from source) |
-| `flux remove <pkg>` | Remove a package and all its installed files |
-| `flux update` | Sync the local recipe repo with the remote |
+| `flux remove [-a] <pkg>` | Remove a package and all its installed files. `-a`/`--autoremove` also removes now-orphaned auto-installed deps |
+| `flux autoremove` | Remove every installed package that's auto-installed and no longer needed by anything |
+| `flux update` | Sync the local recipe repo with the remote, and check for a newer flux or kira-base release |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
 | `flux build [--cross] <pkg>` | Force local compilation, optionally against the cross sysroot |
 | `flux cache <subcommand>` | Manage binary cache |
 | `flux compat <pkg>` | Install via Debian compat container (Phase 3) |
+| `flux version` | Print the installed flux version |
+| `flux self-update` | Rebuild flux from the latest release tag and atomically replace the running binary |
+| `flux base-update` | Update kira-base's core image (musl, BusyBox, runit, eudev, curl) to the latest release |
 
 ---
 
@@ -77,6 +81,8 @@ flux sets `$DESTDIR` before running `%install`. Recipes install into `$DESTDIR`,
 
 A recipe with an empty `[source]` is a meta-package: just a dependency list, optionally with a trivial `%install` (drop a few files) or `%post-install` (create a user). Meta-packages never touch the binary cache, local or remote. They re-run their hooks fresh on every build and install. Caching is only for real compiled artifacts from a fetched, checksummed source tree.
 
+Meta-packages are also never gated by the "already installed" check that real packages get. Every `flux install <meta-pkg>` re-walks its full dependency list and re-runs its hooks, even if it was processed before. This is what lets a meta-package pick up new deps or hook changes on a later install without a version bump.
+
 ### Hook environment
 
 Every hook gets `DESTDIR` and `FLUX_RECIPE_DIR` (the recipe's own directory, useful for referencing `files/`). During `flux build --cross`, hooks also get `CC`, `CXX`, `AR`, `LD`, `STRIP`, `CPP`, `CROSS_COMPILE`, `FLUX_CROSS_HOST`, and `FLUX_CROSS_SYSROOT`, plus `PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR`/`PKG_CONFIG_SYSROOT_DIR` pointed at the cross sysroot.
@@ -109,9 +115,11 @@ package_target = x86_64-linux-musl
 
 Installed packages are tracked in `/var/lib/flux/installed/<pkg>/`:
 - `info`: name, version, install date, auto/manual flag
-- `files`: one absolute system path per line
+- `files`: one absolute system path per line (empty for meta-packages)
 
 `flux remove` reads the files list and deletes every installed file precisely. No orphaned files.
+
+A package gets `auto_installed = 1` whenever it's pulled in purely as someone else's dependency. If it's later requested directly (`flux install <pkg>` on something already installed), its flag flips to `0` even without reinstalling anything. `flux autoremove` (and `flux remove -a`) only ever touch packages still flagged `1` that nothing else currently depends on.
 
 ---
 
@@ -149,9 +157,26 @@ Exit codes are stable. They will not be renumbered.
 
 ---
 
+## Versioning
+
+flux uses Kira's own release-based scheme, not semver: `YY.MM`, with an optional `-N` suffix for a hotfix release in that month (`26.06`, then `26.06-1` for the first hotfix). The version is a single compiled-in constant, `FLUX_VERSION` in `include/flux.h` - there's no separate VERSION file to drift out of sync with the binary.
+
+Cutting a release is just `git tag <version> && git push --tags` on the `flux` repo - no GitHub Release object needed. `flux update` and `flux self-update` read tags directly off the remote with `git ls-remote --tags`, pick the highest one with `sort -V`, and compare it against `FLUX_VERSION`. `flux update` just prints a notice if they differ; `flux self-update` does the actual rebuild-and-swap.
+
+## kira-base updates (`flux base-update`)
+
+`kira-base` (musl, BusyBox, runit, eudev, the bootstrap `dhcpcd`/`curl`) isn't flux-managed and can't rebuild itself from source on an installed system the way flux can - it needs a cross-toolchain and kernel source tree. Instead, `flux update` reads `/etc/kira-release` and checks the `kira-base` repo's tags the same way it checks flux's own; if there's a newer one it just tells you to run `flux base-update`, it never runs automatically.
+
+`flux base-update` fetches that release's `rootfs.tar.gz` and `initramfs.cpio.gz` from `binary_cache_url` (minisign-verified, same key as the package cache), then applies `/etc/kira-update-manifest` from inside the new rootfs - a list `kira-base`'s own Makefile generates, classifying every core file as:
+- `live <path>`: safe to atomically replace right now (musl, BusyBox, curl, the CA bundle, the bootstrap `dhcpcd`) - nothing has it loaded as a continuously-running process, so new invocations just pick up the new file.
+- `restart:<service> <path>`: replaced now, then that runit service is restarted (`eudev`, since unlike PID 1 it's a normal supervised service).
+- `boot <path>`: replaced on disk now, but only takes effect on the next reboot (runit's own `runit-init`/`runsvdir`/`runsv` binaries and the `runit/1,2,3` stage scripts - they're continuously running already, replacing the file doesn't change what's executing in memory).
+
+The new `/boot/initrd.img-<kernel>` is staged the same way, always reboot-required. `flux base-update` tells you at the end whether a reboot is needed.
+
 ## Status
 
-Phase 2. `install`, `remove`, `search`, `update`, `info`, `build` are fully working, including cross-compilation, real per-package dependency resolution, and a local + remote binary cache. `compat` (Phase 3) is not yet implemented.
+Phase 2. `install`, `remove`, `autoremove`, `search`, `update`, `info`, `build`, `version`, `self-update`, `base-update` are fully working, including cross-compilation, real per-package dependency resolution, a local + remote binary cache, and a fully-implemented auto-installed/orphan tracking model. `compat` (Phase 3) is not yet implemented.
 
 See the [Kira Linux specification](https://github.com/shinigami-os) and the full project roadmap.
 

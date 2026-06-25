@@ -5,6 +5,9 @@
 #include "../include/flux.h"
 #include "../include/util.h"
 
+static void check_for_flux_release(void);
+static void check_for_base_release(void);
+
 int flux_update(int argc, char **argv, const char *usage) {
     (void)argc;
     (void)argv;
@@ -57,5 +60,45 @@ int flux_update(int argc, char **argv, const char *usage) {
         }
     }
     printf("[flux] recipe repo up to date\n");
+
+    check_for_flux_release();
+    check_for_base_release();
     return FLUX_ERR_NONE;
+}
+
+static void check_for_flux_release(void) {
+    char tag[64] = {0};
+    if (flux_fetch_latest_git_tag(FLUX_REPO_URL, tag, sizeof(tag)) != FLUX_ERR_NONE) return;
+
+    const char *version = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
+    if (strcmp(version, FLUX_VERSION) != 0) {
+        printf("[flux] a newer flux release is available: %s (current: %s)\n", version, FLUX_VERSION);
+        printf("[flux] run 'flux self-update' to update\n");
+    }
+}
+
+static void check_for_base_release(void) {
+    FILE *rf = fopen("/etc/kira-release", "r");
+    if (!rf) return;
+
+    char line[128];
+    char current[64] = {0};
+    while (fgets(line, sizeof(line), rf)) {
+        strip_newline(line);
+        if (strncmp(line, "KIRA_BASE_VERSION=", 18) == 0) {
+            strncpy(current, line + 18, sizeof(current) - 1);
+            break;
+        }
+    }
+    fclose(rf);
+    if (strlen(current) == 0) return;
+
+    char tag[64] = {0};
+    if (flux_fetch_latest_git_tag(KIRA_BASE_REPO_URL, tag, sizeof(tag)) != FLUX_ERR_NONE) return;
+
+    const char *version = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
+    if (strcmp(version, current) != 0) {
+        printf("[flux] a newer kira-base release is available: %s (current: %s)\n", version, current);
+        printf("[flux] run 'flux base-update' to update\n");
+    }
 }

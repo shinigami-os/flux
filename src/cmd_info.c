@@ -40,19 +40,10 @@ int flux_info(int argc, char **argv, const char *usage) {
     printf("  %-16s %s\n",   "status:",      installed  ? "installed"        : "not installed");
 
     if (installed) {
-        // read install date from info file
-        char info_path[FLUX_MAX_PATH_LEN + 8];
-        snprintf(info_path, sizeof(info_path), "/var/lib/flux/installed/%s/info", pkg);
-        FILE *f = fopen(info_path, "r");
-        if (f) {
-            char line[256];
-            while (fgets(line, sizeof(line), f)) {
-                if (strncmp(line, "install_date", 12) == 0) {
-                    char *eq = strchr(line, '=');
-                    if (eq) printf("  %-16s %s", "installed on:", eq + 2);
-                }
-            }
-            fclose(f);
+        flux_pkg_info_t db_info;
+        if (flux_db_read_info(pkg, &db_info) == FLUX_ERR_NONE) {
+            printf("  %-16s %s\n", "installed on:", db_info.install_date);
+            printf("  %-16s %s\n", "auto-installed:", db_info.auto_installed ? "yes" : "no");
         }
     }
 
