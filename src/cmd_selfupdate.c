@@ -44,6 +44,21 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
+    if (system("command -v gcc >/dev/null 2>&1") != 0 || system("command -v make >/dev/null 2>&1") != 0) {
+        fprintf(stderr, "flux: gcc/make not found, can't build flux from source\n");
+        fprintf(stderr, "hint: run 'flux install build-essential' first\n");
+        return FLUX_ERR_BUILD;
+    }
+
+    if (system("printf '#include <stdio.h>\\nint main(void){return 0;}\\n' | "
+               "gcc -x c -c - -o /tmp/flux_toolchain_test.o >/dev/null 2>&1") != 0) {
+        remove("/tmp/flux_toolchain_test.o");
+        fprintf(stderr, "flux: gcc can't find standard headers (e.g. stdio.h)\n");
+        fprintf(stderr, "hint: the C library / headers on this system are incomplete; check kira-base\n");
+        return FLUX_ERR_BUILD;
+    }
+    remove("/tmp/flux_toolchain_test.o");
+
     printf("[flux] updating flux %s -> %s\n", FLUX_VERSION, version);
 
     const char *scratch = "/tmp/flux-selfupdate";
