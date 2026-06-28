@@ -16,6 +16,7 @@ int flux_build(int argc, char **argv, const char *usage);
 int flux_remove(int argc, char **argv, const char *usage);
 int flux_update(int argc, char **argv, const char *usage);
 int flux_info(int argc, char **argv, const char *usage);
+int flux_list(int argc, char **argv, const char *usage);
 int flux_cache(int argc, char **argv, const char *usage);
 int flux_compat(int argc, char **argv, const char *usage);
 int flux_autoremove(int argc, char **argv, const char *usage);
@@ -31,6 +32,7 @@ flux_cmd_t commands[] = {
     {"autoremove", flux_autoremove, "Remove all orphaned auto-installed dependencies", "flux autoremove"},
     {"update", flux_update, "Sync recipe repo and check for newer flux/kira-base releases", "flux update"},
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},
+    {"list", flux_list, "List installed packages", "flux list [-a]"},
     {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
     {"compat", flux_compat, "Install via Debian compat container", "flux compat <pkg>"},
     {"version", flux_version, "Show the installed flux version", "flux version"},

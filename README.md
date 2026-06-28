@@ -27,6 +27,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux update` | Sync the local recipe repo with the remote, and check for a newer flux or kira-base release |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
+| `flux list [-a]` | List installed packages. `-a` to sort alphabetically, `-auto` to show auto-installed deps |
 | `flux build [--cross] <pkg>` | Force local compilation, optionally against the cross sysroot |
 | `flux cache <subcommand>` | Manage binary cache |
 | `flux compat <pkg>` | Install via Debian compat container (Phase 3) |
