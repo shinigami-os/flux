@@ -22,6 +22,7 @@ int flux_autoremove_orphans(int *removed_count);
 
 int flux_cache_key(const char *name, const char *version, const char *cflags, const char *target, char *out, size_t outlen);
 int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen);
+int flux_cache_lookup_local(const char *key, char *path_out, size_t path_outlen);
 int flux_cache_store(const char *key, const char *destdir, const char *secret_key_path);
 int flux_cache_verify(const char *path, const char *pub_path);
 

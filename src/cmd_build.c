@@ -73,7 +73,8 @@ int flux_build(int argc, char **argv, const char *usage) {
             return FLUX_ERR_GENERAL;
         }
 
-        if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
+        // flux build never pulls from the remote cache, only ever builds or uses a local hit
+        if (flux_cache_lookup_local(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
             printf("[flux] %s is already cached at %s\n", pkg, cache_path);
             return FLUX_ERR_NONE;
         }

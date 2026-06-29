@@ -173,6 +173,13 @@ int flux_cache_key(const char *name, const char *version, const char *cflags, co
     return FLUX_ERR_NONE;
 }
 
+int flux_cache_lookup_local(const char *key, char *path_out, size_t path_outlen) {
+    snprintf(path_out, path_outlen, "/var/cache/flux/%s.tar.zst", key);
+    struct stat st;
+    if (stat(path_out, &st) == 0) return FLUX_ERR_NONE;
+    return FLUX_ERR_NOT_FOUND;
+}
+
 int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     snprintf(path_out, path_outlen, "/var/cache/flux/%s.tar.zst", key);
 
