@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.06-2"
+#define FLUX_VERSION "26.06-3"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define KIRA_BASE_REPO_URL "https://github.com/shinigami-os/kira-base"
 
@@ -65,6 +65,8 @@ typedef struct {
     char description[FLUX_MAX_DESC_LEN];
     char license[FLUX_MAX_LICENSE_LEN];
     int size;
+    // zero-default means "stage into the cross sysroot", matching pre-existing recipes
+    int no_sysroot_stage;
     char url[FLUX_MAX_URL_LEN];
     char sha256[FLUX_MAX_SHA256_LEN];
     char cflags[FLUX_MAX_CFLAGS_LEN];

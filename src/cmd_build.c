@@ -196,7 +196,7 @@ int flux_build(int argc, char **argv, const char *usage) {
     printf("[flux] installing to destdir...\n");
     RUN_HOOK(recipe.hook_install, "install");
 
-    if (!is_meta && cross && strlen(config.flux_cross_compile_sysroot) > 0) {
+    if (!is_meta && cross && !recipe.no_sysroot_stage && strlen(config.flux_cross_compile_sysroot) > 0) {
         char sysroot_cmd[FLUX_MAX_PATH_LEN * 2 + 32];
         snprintf(sysroot_cmd, sizeof(sysroot_cmd), "cp -a \"%s\"/. \"%s\"/", destdir, config.flux_cross_compile_sysroot);
         system(sysroot_cmd);

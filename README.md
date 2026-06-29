@@ -84,6 +84,10 @@ A recipe with an empty `[source]` is a meta-package: just a dependency list, opt
 
 Meta-packages are also never gated by the "already installed" check that real packages get. Every `flux install <meta-pkg>` re-walks its full dependency list and re-runs its hooks, even if it was processed before. This is what lets a meta-package pick up new deps or hook changes on a later install without a version bump.
 
+### `no_sysroot_stage`
+
+During `flux build --cross`, every built package's `$DESTDIR` normally also gets copied into `cross_compile_sysroot` so later cross-built packages in the dependency chain can find it via `$FLUX_CROSS_SYSROOT`. A recipe that builds the cross toolchain itself (`gcc`, `binutils`) must not go through this: copying its own output back over the sysroot it was just built with corrupts that toolchain for every future cross build. Set `no_sysroot_stage = true` in `[meta]` to skip the copy for a recipe like that. Omit it (or set anything else) and the default, normal staging behavior applies.
+
 ### Hook environment
 
 Every hook gets `DESTDIR` and `FLUX_RECIPE_DIR` (the recipe's own directory, useful for referencing `files/`). During `flux build --cross`, hooks also get `CC`, `CXX`, `AR`, `LD`, `STRIP`, `CPP`, `CROSS_COMPILE`, `FLUX_CROSS_HOST`, and `FLUX_CROSS_SYSROOT`, plus `PKG_CONFIG_PATH`/`PKG_CONFIG_LIBDIR`/`PKG_CONFIG_SYSROOT_DIR` pointed at the cross sysroot.

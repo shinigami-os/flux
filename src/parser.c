@@ -78,6 +78,7 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
             if (strcmp(key, "description") == 0) strncpy(recipe->description, val, FLUX_MAX_DESC_LEN - 1);
             if (strcmp(key, "license") == 0) strncpy(recipe->license, val, FLUX_MAX_LICENSE_LEN - 1);
             if (strcmp(key, "size") == 0) recipe->size = atoi(val);
+            if (strcmp(key, "no_sysroot_stage") == 0) recipe->no_sysroot_stage = (strcmp(val, "true") == 0);
         }
         if (state == KOTO_SOURCE) {
             if (strcmp(key, "url") == 0) strncpy(recipe->url, val, FLUX_MAX_URL_LEN - 1);
