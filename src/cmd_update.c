@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,7 @@
 
 static void check_for_flux_release(void);
 static void check_for_base_release(void);
+static void check_for_kernel_release(const flux_config_t *config);
 
 int flux_update(int argc, char **argv, const char *usage) {
     (void)argc;
@@ -63,6 +65,7 @@ int flux_update(int argc, char **argv, const char *usage) {
 
     check_for_flux_release();
     check_for_base_release();
+    check_for_kernel_release(&config);
     return FLUX_ERR_NONE;
 }
 
@@ -100,5 +103,25 @@ static void check_for_base_release(void) {
     if (strcmp(version, current) != 0) {
         printf("[flux] a newer kira-base release is available: %s (current: %s)\n", version, current);
         printf("[flux] run 'flux base-update' to update\n");
+    }
+}
+
+static void check_for_kernel_release(const flux_config_t *config) {
+    if (strlen(config->binary_cache_url) == 0) return;
+
+    FILE *f = popen("uname -r", "r");
+    if (!f) return;
+    char current[128] = {0};
+    if (fgets(current, sizeof(current), f))
+        strip_newline(current);
+    pclose(f);
+    if (strlen(current) == 0) return;
+
+    char latest[128] = {0};
+    if (flux_fetch_latest_kernel_version(config->binary_cache_url, latest, sizeof(latest)) != FLUX_ERR_NONE) return;
+
+    if (strcmp(current, latest) != 0) {
+        printf("[flux] a newer kernel is available: %s (current: %s)\n", latest, current);
+        printf("[flux] run 'flux kernel-update' to update\n");
     }
 }

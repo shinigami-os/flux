@@ -27,6 +27,7 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
 int flux_cache_verify(const char *path, const char *pub_path);
 
 int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen);
+int flux_fetch_latest_kernel_version(const char *cache_url, char *out, size_t outlen);
 
 int flux_colors_enabled(void);
 void flux_log(const char *fmt, ...);

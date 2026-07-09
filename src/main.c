@@ -23,6 +23,7 @@ int flux_autoremove(int argc, char **argv, const char *usage);
 int flux_version(int argc, char **argv, const char *usage);
 int flux_self_update(int argc, char **argv, const char *usage);
 int flux_base_update(int argc, char **argv, const char *usage);
+int flux_kernel_update(int argc, char **argv, const char *usage);
 
 flux_cmd_t commands[] = {
     {"install", flux_install, "Install a package (from cache or compile)", "flux install <pkg>"},
@@ -38,6 +39,7 @@ flux_cmd_t commands[] = {
     {"version", flux_version, "Show the installed flux version", "flux version"},
     {"self-update", flux_self_update, "Rebuild and replace flux from the latest release", "flux self-update"},
     {"base-update", flux_base_update, "Update kira-base's core image to the latest release", "flux base-update"},
+    {"kernel-update", flux_kernel_update, "Update the Shinigami kernel to the latest release", "flux kernel-update"},
     {NULL, NULL, NULL, NULL}
 };
 

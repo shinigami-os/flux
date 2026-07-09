@@ -44,7 +44,8 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    if (system("command -v gcc >/dev/null 2>&1") != 0 || system("command -v make >/dev/null 2>&1") != 0) {
+    if (system("command -v gcc >/dev/null 2>&1") != 0 ||
+        system("command -v make >/dev/null 2>&1") != 0) {
         fprintf(stderr, "flux: gcc/make not found, can't build flux from source\n");
         fprintf(stderr, "hint: run 'flux install build-essential' first\n");
         return FLUX_ERR_BUILD;
@@ -53,10 +54,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     {
         const char *test_src = "/tmp/flux_toolchain_test.c";
         FILE *tf = fopen(test_src, "w");
-        if (!tf) {
-            fprintf(stderr, "flux: can't write to /tmp\n");
-            return FLUX_ERR_GENERAL;
-        }
+        if (!tf) { fprintf(stderr, "flux: can't write to /tmp\n"); return FLUX_ERR_GENERAL; }
         fprintf(tf, "#include <stdio.h>\nint main(void){return 0;}\n");
         fclose(tf);
         int tc = system("gcc /tmp/flux_toolchain_test.c -c -o /tmp/flux_toolchain_test.o >/dev/null 2>&1");
@@ -76,9 +74,11 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
     system(cmd);
 
-    snprintf(cmd, sizeof(cmd), "git clone --depth 1 --branch \"%s\" \"%s\" \"%s\"", tag, FLUX_REPO_URL, scratch);
+    snprintf(cmd, sizeof(cmd),
+        "git clone --depth 1 --branch \"%s\" \"%s\" \"%s\"",
+        tag, FLUX_REPO_URL, scratch);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to fetch flux source at %s\n", tag);
+        fprintf(stderr, "flux: failed to fetch flux source\n");
         return FLUX_ERR_NETWORK;
     }
 
@@ -86,6 +86,8 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "cd \"%s\" && make", scratch);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: build failed\n");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
+        system(cmd);
         return FLUX_ERR_BUILD;
     }
 
@@ -105,7 +107,6 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     snprintf(staged, sizeof(staged), "%s.new", current);
     snprintf(backup, sizeof(backup), "%s.bak", current);
 
-    // stage in the same directory as the target so the final rename is atomic
     snprintf(cmd, sizeof(cmd), "cp \"%s\" \"%s\" && chmod 755 \"%s\"", new_bin, staged, staged);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: failed to stage new binary (need root?)\n");
