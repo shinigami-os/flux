@@ -411,13 +411,67 @@ int flux_install(int argc, char **argv, const char *usage) {
     int file_count = 0;
 
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
-    snprintf(tarball,   sizeof(tarball),   "/tmp/flux-build/%s.tar.gz", pkg);
+    tarball[0] = '\0';
 
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "mkdir -p /tmp/flux-build");
     system(cmd);
 
-    if (has_source) {
+    int is_git = (has_source && strncmp(recipe.url, "git+", 4) == 0);
+
+    if (is_git) {
+        const char *git_url_start = recipe.url + 4;
+        char git_url[512];
+        char git_branch[256] = "";
+        const char *hash = strchr(git_url_start, '#');
+        if (hash) {
+            size_t url_len = (size_t)(hash - git_url_start);
+            if (url_len >= sizeof(git_url)) url_len = sizeof(git_url) - 1;
+            strncpy(git_url, git_url_start, url_len);
+            git_url[url_len] = '\0';
+            strncpy(git_branch, hash + 1, sizeof(git_branch) - 1);
+        } else {
+            strncpy(git_url, git_url_start, sizeof(git_url) - 1);
+            git_url[sizeof(git_url) - 1] = '\0';
+        }
+
+        printf("[flux] cloning: %s\n", git_url);
+        char clone_cmd[1024];
+        if (strlen(git_branch) > 0) {
+            snprintf(clone_cmd, sizeof(clone_cmd),
+                     "rm -rf \"%s\" && git clone --depth=1 --branch \"%s\" \"%s\" \"%s\"",
+                     build_dir, git_branch, git_url, build_dir);
+        } else {
+            snprintf(clone_cmd, sizeof(clone_cmd),
+                     "rm -rf \"%s\" && git clone --depth=1 \"%s\" \"%s\"",
+                     build_dir, git_url, build_dir);
+        }
+        if (system(clone_cmd) != 0) {
+            fprintf(stderr, "flux: failed to clone git repository\n");
+            return FLUX_ERR_NETWORK;
+        }
+
+        if (strlen(recipe.sha256) > 0) {
+            printf("[flux] verifying commit...\n");
+            char sha_cmd[640];
+            snprintf(sha_cmd, sizeof(sha_cmd),
+                     "git -C \"%s\" rev-parse HEAD | tr -d '\\n' > /tmp/flux_hash_actual", build_dir);
+            system(sha_cmd);
+            FILE *hf = fopen("/tmp/flux_hash_actual", "r");
+            if (!hf) return FLUX_ERR_GENERAL;
+            char actual[65] = {0};
+            fread(actual, 1, 64, hf);
+            fclose(hf);
+            remove("/tmp/flux_hash_actual");
+            if (strcmp(actual, recipe.sha256) != 0) {
+                fprintf(stderr, "flux: commit mismatch\nexpected: %s\ngot:      %s\n",
+                        recipe.sha256, actual);
+                return FLUX_ERR_GENERAL;
+            }
+        }
+    } else if (has_source) {
+        snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s.tar.gz", pkg);
+
         printf("[flux] fetching source: %s\n", recipe.url);
         if (fetch_source(recipe.url, tarball) != 0) {
             fprintf(stderr, "flux: failed to fetch source\n");
@@ -489,7 +543,11 @@ int flux_install(int argc, char **argv, const char *usage) {
         flux_cache_store(cache_key, destdir, config.flux_secret_key_path);
 
     char cleanup_cmd[1024];
-    snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);
+    if (strlen(tarball) > 0) {
+        snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);
+    } else {
+        snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf \"%s\" \"%s\"", build_dir, destdir);
+    }
     system(cleanup_cmd);
 
     if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
