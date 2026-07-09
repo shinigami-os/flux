@@ -9,10 +9,10 @@ static int cmp_names(const void *a, const void *b) {
 }
 
 int flux_list(int argc, char **argv, const char *usage) {
-    int auto_only = 0;
+    int show_auto = 0;  /* -a: include auto-installed packages in the listing */
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto") == 0) {
-            auto_only = 1;
+            show_auto = 1;
         } else {
             flux_usage_error(usage);
             return FLUX_ERR_USAGE;
@@ -32,15 +32,15 @@ int flux_list(int argc, char **argv, const char *usage) {
     for (int i = 0; i < count; i++) {
         flux_pkg_info_t info;
         if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
-        if (auto_only && !info.auto_installed) continue;
+        if (!show_auto && info.auto_installed) continue;
 
-        printf("%-32s %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "manual");
+        printf("%-32s %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "");
         shown++;
     }
 
     if (shown == 0) {
-        if (auto_only)
-            printf("[flux] no auto-installed packages\n");
+        if (!show_auto)
+            printf("[flux] no manually installed packages (run 'flux list -a' to see all)\n");
         else
             printf("[flux] no packages installed\n");
     }

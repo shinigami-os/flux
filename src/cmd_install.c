@@ -12,6 +12,7 @@
 
 static int g_auto_installed = 0;
 static int g_yes = 0;
+static int g_force = 0;
 
 static int fetch_source(const char *url, const char *dest) {
     char cmd[1024];
@@ -200,9 +201,15 @@ static int collect_files_from_destdir(const char *destdir, char files[][FLUX_MAX
 }
 
 int flux_install(int argc, char **argv, const char *usage) {
-    // parse -y flag
-    if (argc >= 1 && strcmp(argv[0], "-y") == 0) {
-        g_yes = 1;
+    while (argc >= 1 && argv[0][0] == '-') {
+        if (strcmp(argv[0], "-y") == 0)
+            g_yes = 1;
+        else if (strcmp(argv[0], "-f") == 0 || strcmp(argv[0], "--force") == 0)
+            g_force = 1;
+        else {
+            flux_usage_error(usage);
+            return FLUX_ERR_USAGE;
+        }
         argv++;
         argc--;
     }
@@ -253,7 +260,7 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     // meta-packages are never marked installed, they're a list to process,
     // always re-walked so their deps and hooks can pick up changes.
-    if (has_source && flux_db_is_installed(pkg)) {
+    if (has_source && flux_db_is_installed(pkg) && !g_force) {
         if (!g_auto_installed) flux_db_set_auto_installed(pkg, 0);
         printf("[flux] %s is already installed\n", pkg);
         return FLUX_ERR_NONE;
@@ -324,6 +331,8 @@ int flux_install(int argc, char **argv, const char *usage) {
             printf("\n");
         }
 
+        int saved_force = g_force;
+        g_force = 0;          /* deps are never force-reinstalled, only the root package is */
         g_auto_installed = 1;
         for (int i = 0; i < queue.count - 1; i++) {
             char *dep_argv[] = { queue.pkgs[i] };
@@ -331,10 +340,12 @@ int flux_install(int argc, char **argv, const char *usage) {
             if (dep_err != FLUX_ERR_NONE) {
                 fprintf(stderr, "flux: failed to install dependency '%s'\n", queue.pkgs[i]);
                 g_auto_installed = 0;
+                g_force = saved_force;
                 return FLUX_ERR_DEPENDENCY;
             }
         }
         g_auto_installed = 0;
+        g_force = saved_force;
     }
 
     // install from cache

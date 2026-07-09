@@ -51,18 +51,36 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_BUILD;
     }
 
+    int need_explicit_includes = 0;
     {
         const char *test_src = "/tmp/flux_toolchain_test.c";
         FILE *tf = fopen(test_src, "w");
         if (!tf) { fprintf(stderr, "flux: can't write to /tmp\n"); return FLUX_ERR_GENERAL; }
         fprintf(tf, "#include <stdio.h>\nint main(void){return 0;}\n");
         fclose(tf);
+
         int tc = system("gcc /tmp/flux_toolchain_test.c -c -o /tmp/flux_toolchain_test.o >/dev/null 2>&1");
+        if (tc != 0) {
+            /* gcc may have wrong default sysroot from cross-build; try explicit include path */
+            tc = system("gcc -I/usr/include /tmp/flux_toolchain_test.c -c -o /tmp/flux_toolchain_test.o >/dev/null 2>&1");
+            if (tc == 0) {
+                need_explicit_includes = 1;
+                printf("[flux] note: gcc needs -I/usr/include (musl sysroot mismatch — will add to build)\n");
+            }
+        }
+
         remove(test_src);
         remove("/tmp/flux_toolchain_test.o");
+
         if (tc != 0) {
-            fprintf(stderr, "flux: gcc can't find standard headers (e.g. stdio.h)\n");
-            fprintf(stderr, "hint: the C library / headers on this system are incomplete; check kira-base\n");
+            struct stat hst;
+            if (stat("/usr/include/stdio.h", &hst) != 0) {
+                fprintf(stderr, "flux: /usr/include/stdio.h not found\n");
+                fprintf(stderr, "hint: musl dev headers are missing — run 'flux base-update' or reinstall kira-base\n");
+            } else {
+                fprintf(stderr, "flux: gcc cannot compile against /usr/include headers\n");
+                fprintf(stderr, "hint: try 'flux install -f gcc' to reinstall the compiler\n");
+            }
             return FLUX_ERR_BUILD;
         }
     }
@@ -83,7 +101,10 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     }
 
     printf("[flux] building...\n");
-    snprintf(cmd, sizeof(cmd), "cd \"%s\" && make", scratch);
+    if (need_explicit_includes)
+        snprintf(cmd, sizeof(cmd), "cd \"%s\" && make CFLAGS=\"-Wall -Wextra -pedantic -std=c11 -I/usr/include\"", scratch);
+    else
+        snprintf(cmd, sizeof(cmd), "cd \"%s\" && make", scratch);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: build failed\n");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);

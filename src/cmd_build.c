@@ -86,10 +86,60 @@ int flux_build(int argc, char **argv, const char *usage) {
     char cmd[2048];
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
     snprintf(destdir,   sizeof(destdir),   "/tmp/flux-build/%s-destdir", pkg);
+    tarball[0] = '\0';
 
     system("mkdir -p /tmp/flux-build");
 
-    if (!is_meta) {
+    int is_git = (!is_meta && strncmp(recipe.url, "git+", 4) == 0);
+
+    if (is_git) {
+        const char *git_url_start = recipe.url + 4;
+        char git_url[512];
+        char git_branch[256] = "";
+        const char *hash = strchr(git_url_start, '#');
+        if (hash) {
+            size_t url_len = (size_t)(hash - git_url_start);
+            if (url_len >= sizeof(git_url)) url_len = sizeof(git_url) - 1;
+            strncpy(git_url, git_url_start, url_len);
+            git_url[url_len] = '\0';
+            strncpy(git_branch, hash + 1, sizeof(git_branch) - 1);
+        } else {
+            strncpy(git_url, git_url_start, sizeof(git_url) - 1);
+            git_url[sizeof(git_url) - 1] = '\0';
+        }
+
+        printf("[flux] cloning: %s\n", git_url);
+        if (strlen(git_branch) > 0) {
+            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 --branch \"%s\" \"%s\" \"%s\"",
+                     build_dir, git_branch, git_url, build_dir);
+        } else {
+            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 \"%s\" \"%s\"",
+                     build_dir, git_url, build_dir);
+        }
+        if (system(cmd) != 0) {
+            fprintf(stderr, "flux: failed to clone git repository\n");
+            return FLUX_ERR_NETWORK;
+        }
+
+        if (strlen(recipe.sha256) > 0) {
+            printf("[flux] verifying commit...\n");
+            char sha_cmd[640];
+            snprintf(sha_cmd, sizeof(sha_cmd),
+                     "git -C \"%s\" rev-parse HEAD | tr -d '\\n' > /tmp/flux_hash_actual", build_dir);
+            system(sha_cmd);
+            FILE *f = fopen("/tmp/flux_hash_actual", "r");
+            if (!f) return FLUX_ERR_GENERAL;
+            char actual[65] = {0};
+            fread(actual, 1, 64, f);
+            fclose(f);
+            remove("/tmp/flux_hash_actual");
+            if (strcmp(actual, recipe.sha256) != 0) {
+                fprintf(stderr, "flux: commit mismatch\nexpected: %s\ngot:      %s\n",
+                        recipe.sha256, actual);
+                return FLUX_ERR_GENERAL;
+            }
+        }
+    } else if (!is_meta) {
         const char *url_basename = strrchr(recipe.url, '/');
         url_basename = url_basename ? url_basename + 1 : recipe.url;
         snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
@@ -229,7 +279,11 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     // cleanup
     char cleanup[1280];
-    snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);
+    if (strlen(tarball) > 0) {
+        snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);
+    } else {
+        snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\"", build_dir, destdir);
+    }
     system(cleanup);
 
     printf("[flux] %s built and cached at /var/cache/flux/%s.tar.zst\n", pkg, cache_key);

@@ -26,7 +26,7 @@ int flux_fetch_latest_kernel_version(const char *cache_url, char *out, size_t ou
 
     const char *tmp = "/tmp/flux-kernel-latest";
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "curl -fsSL --max-time 15 -o \"%s\" \"%s\"", tmp, url);
+    snprintf(cmd, sizeof(cmd), "curl -fsSL --max-time 15 -o \"%s\" \"%s\" 2>/dev/null", tmp, url);
     if (system(cmd) != 0) return FLUX_ERR_NETWORK;
 
     FILE *f = fopen(tmp, "r");
