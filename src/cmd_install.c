@@ -436,7 +436,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
 
         printf("[flux] cloning: %s\n", git_url);
-        char clone_cmd[1024];
+        char clone_cmd[2048];
         if (strlen(git_branch) > 0) {
             snprintf(clone_cmd, sizeof(clone_cmd),
                      "rm -rf \"%s\" && git clone --depth=1 --branch \"%s\" \"%s\" \"%s\"",
