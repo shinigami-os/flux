@@ -50,14 +50,24 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_BUILD;
     }
 
-    if (system("printf '#include <stdio.h>\\nint main(void){return 0;}\\n' | "
-               "gcc -x c -c - -o /tmp/flux_toolchain_test.o >/dev/null 2>&1") != 0) {
+    {
+        const char *test_src = "/tmp/flux_toolchain_test.c";
+        FILE *tf = fopen(test_src, "w");
+        if (!tf) {
+            fprintf(stderr, "flux: can't write to /tmp\n");
+            return FLUX_ERR_GENERAL;
+        }
+        fprintf(tf, "#include <stdio.h>\nint main(void){return 0;}\n");
+        fclose(tf);
+        int tc = system("gcc /tmp/flux_toolchain_test.c -c -o /tmp/flux_toolchain_test.o >/dev/null 2>&1");
+        remove(test_src);
         remove("/tmp/flux_toolchain_test.o");
-        fprintf(stderr, "flux: gcc can't find standard headers (e.g. stdio.h)\n");
-        fprintf(stderr, "hint: the C library / headers on this system are incomplete; check kira-base\n");
-        return FLUX_ERR_BUILD;
+        if (tc != 0) {
+            fprintf(stderr, "flux: gcc can't find standard headers (e.g. stdio.h)\n");
+            fprintf(stderr, "hint: the C library / headers on this system are incomplete; check kira-base\n");
+            return FLUX_ERR_BUILD;
+        }
     }
-    remove("/tmp/flux_toolchain_test.o");
 
     printf("[flux] updating flux %s -> %s\n", FLUX_VERSION, version);
 
