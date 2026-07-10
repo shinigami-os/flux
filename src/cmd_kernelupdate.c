@@ -81,9 +81,15 @@ static int download_signed_kernel(const char *cache_url, const char *version,
 }
 
 int flux_kernel_update(int argc, char **argv, const char *usage) {
-    (void)argc;
-    (void)argv;
-    (void)usage;
+    int force = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0)
+            force = 1;
+        else {
+            flux_usage_error(usage);
+            return FLUX_ERR_USAGE;
+        }
+    }
 
     char current[128];
     if (read_current_kernel(current, sizeof(current)) != FLUX_ERR_NONE) {
@@ -106,7 +112,7 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NETWORK;
     }
 
-    if (strcmp(current, latest) == 0) {
+    if (strcmp(current, latest) == 0 && !force) {
         printf("[flux] kernel already up to date (%s)\n", current);
         return FLUX_ERR_NONE;
     }

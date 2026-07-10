@@ -37,9 +37,9 @@ flux_cmd_t commands[] = {
     {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
     {"compat", flux_compat, "Install via Debian compat container", "flux compat <pkg>"},
     {"version", flux_version, "Show the installed flux version", "flux version"},
-    {"self-update", flux_self_update, "Rebuild and replace flux from the latest release", "flux self-update"},
-    {"base-update", flux_base_update, "Update kira-base's core image to the latest release", "flux base-update"},
-    {"kernel-update", flux_kernel_update, "Update the Shinigami kernel to the latest release", "flux kernel-update"},
+    {"self-update", flux_self_update, "Rebuild and replace flux from the latest release", "flux self-update [-f]"},
+    {"base-update", flux_base_update, "Update kira-base's core image to the latest release", "flux base-update [-f]"},
+    {"kernel-update", flux_kernel_update, "Update the Shinigami kernel to the latest release", "flux kernel-update [-f]"},
     {NULL, NULL, NULL, NULL}
 };
 

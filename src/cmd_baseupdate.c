@@ -138,9 +138,15 @@ static void apply_initramfs(const char *scratch, int *boot_pending) {
 }
 
 int flux_base_update(int argc, char **argv, const char *usage) {
-    (void)argc;
-    (void)argv;
-    (void)usage;
+    int force = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0)
+            force = 1;
+        else {
+            flux_usage_error(usage);
+            return FLUX_ERR_USAGE;
+        }
+    }
 
     char current[64];
     if (read_current_version(current, sizeof(current)) != FLUX_ERR_NONE) {
@@ -161,7 +167,7 @@ int flux_base_update(int argc, char **argv, const char *usage) {
     }
 
     const char *version = strip_v(tag);
-    if (strcmp(version, current) == 0) {
+    if (strcmp(version, current) == 0 && !force) {
         printf("[flux] kira-base already up to date (%s)\n", current);
         return FLUX_ERR_NONE;
     }

@@ -22,9 +22,15 @@ static void current_binary_path(char *out, size_t outlen) {
 }
 
 int flux_self_update(int argc, char **argv, const char *usage) {
-    (void)argc;
-    (void)argv;
-    (void)usage;
+    int force = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0)
+            force = 1;
+        else {
+            flux_usage_error(usage);
+            return FLUX_ERR_USAGE;
+        }
+    }
 
     printf("[flux] checking for a newer release...\n");
     char tag[64];
@@ -39,7 +45,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     }
 
     const char *version = strip_v(tag);
-    if (strcmp(version, FLUX_VERSION) == 0) {
+    if (strcmp(version, FLUX_VERSION) == 0 && !force) {
         printf("[flux] already up to date (%s)\n", FLUX_VERSION);
         return FLUX_ERR_NONE;
     }
