@@ -132,8 +132,15 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
     } else {
         char cache_key[256];
         char cache_path[FLUX_MAX_PATH_LEN];
+        char native_target[64];
+        const char *cache_target;
         memset(cache_key, 0, sizeof(cache_key));
-        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config->package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+        if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
+            cache_target = native_target;
+        } else {
+            cache_target = config->package_target;
+        }
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             needs_build_deps = (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) != FLUX_ERR_NONE);
         } else {
             needs_build_deps = 1;
@@ -275,7 +282,14 @@ int flux_install(int argc, char **argv, const char *usage) {
     int cache_hit = 0;
 
     if (has_source) {
-        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, config.package_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+        char native_target[64];
+        const char *cache_target;
+        if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
+            cache_target = native_target;
+        } else {
+            cache_target = config.package_target;
+        }
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
                 printf("[flux] cache hit: %s\n", cache_path);
                 if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {

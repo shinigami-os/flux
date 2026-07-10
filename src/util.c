@@ -144,6 +144,20 @@ int flux_db_remove(const char *name) {
 }
 
 
+int flux_native_target(char *out, size_t outlen) {
+    FILE *f = popen("gcc -dumpmachine 2>/dev/null", "r");
+    if (!f) return FLUX_ERR_GENERAL;
+    if (fgets(out, outlen, f) == NULL) {
+        pclose(f);
+        return FLUX_ERR_GENERAL;
+    }
+    pclose(f);
+    strip_newline(out);
+    trim_right(out);
+    if (out[0] == '\0') return FLUX_ERR_GENERAL;
+    return FLUX_ERR_NONE;
+}
+
 int flux_cache_key(const char *name, const char *version, const char *cflags, const char *target, char *out, size_t outlen) {
     // hash cflags alone for native builds (preserves existing cache keys),
     // append |target for cross builds so they get a distinct key
