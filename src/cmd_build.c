@@ -226,10 +226,10 @@ int flux_build(int argc, char **argv, const char *usage) {
                 fprintf(_f, "export CPP=\"%sgcc -E\"\n", config.flux_cross_compile_prefix); \
                 fprintf(_f, "export FLUX_CROSS_HOST=\"x86_64-linux-musl\"\n"); \
                 fprintf(_f, "export FLUX_CROSS_SYSROOT=\"%s\"\n", config.flux_cross_compile_sysroot); \
+                fprintf(_f, "export PKG_CONFIG_PATH=\"%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig\"\n", config.flux_cross_compile_sysroot, config.flux_cross_compile_sysroot); \
+                fprintf(_f, "export PKG_CONFIG_LIBDIR=\"%s/usr/lib/pkgconfig\"\n", config.flux_cross_compile_sysroot); \
+                fprintf(_f, "export PKG_CONFIG_SYSROOT_DIR=\"%s\"\n", config.flux_cross_compile_sysroot); \
             } \
-            fprintf(_f, "export PKG_CONFIG_PATH=\"%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig\"\n", config.flux_cross_compile_sysroot, config.flux_cross_compile_sysroot); \
-            fprintf(_f, "export PKG_CONFIG_LIBDIR=\"%s/usr/lib/pkgconfig\"\n", config.flux_cross_compile_sysroot); \
-            fprintf(_f, "export PKG_CONFIG_SYSROOT_DIR=\"%s\"\n", config.flux_cross_compile_sysroot); \
             fprintf(_f, "%s\n", hook); \
             fclose(_f); \
             chmod(_script, 0755); \
