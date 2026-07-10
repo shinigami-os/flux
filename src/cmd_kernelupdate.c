@@ -145,6 +145,19 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_GENERAL;
     }
 
+    // regenerate module dependency files for the new kernel
+    printf("[flux] running depmod...\n");
+    snprintf(cmd, sizeof(cmd), "depmod -a \"%s\"", latest);
+    if (system(cmd) != 0)
+        printf("[flux] warning: depmod failed — modprobe may not find all modules\n");
+
+    // note old modules directory for rollback awareness
+    struct stat old_mod_st;
+    char old_modules_path[256];
+    snprintf(old_modules_path, sizeof(old_modules_path), "/lib/modules/%s", current);
+    if (strcmp(current, latest) != 0 && stat(old_modules_path, &old_mod_st) == 0)
+        printf("[flux] old modules kept at %s (for rollback)\n", old_modules_path);
+
     // update bootloader if grub is present
     if (system("command -v grub-mkconfig >/dev/null 2>&1") == 0) {
         printf("[flux] updating grub...\n");
