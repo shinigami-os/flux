@@ -255,6 +255,21 @@ int flux_build(int argc, char **argv, const char *usage) {
     printf("[flux] installing to destdir...\n");
     RUN_HOOK(recipe.hook_install, "install");
 
+    if (!is_meta && cross && strlen(config.flux_cross_compile_sysroot) > 0) {
+        // libtool records dependency paths it discovered via PKG_CONFIG_LIBDIR
+        // pointing at the cross-sysroot directly into .la files' dependency_libs;
+        // those dev-machine-only paths are wrong once this package ships to the
+        // real target, which has its deps under plain /usr/lib instead
+        char destdir_la_patch[FLUX_MAX_PATH_LEN * 2 + 128];
+        snprintf(destdir_la_patch, sizeof(destdir_la_patch),
+            "find \"%s\" -name \"*.la\" | xargs -r sed -i"
+            " \"s|%s/usr/|/usr/|g\""
+            " 2>/dev/null || true",
+            destdir, config.flux_cross_compile_sysroot);
+        system(destdir_la_patch);
+        printf("[flux] stripped cross-sysroot paths from destdir .la files\n");
+    }
+
     if (!is_meta && cross && !recipe.no_sysroot_stage && strlen(config.flux_cross_compile_sysroot) > 0) {
         char sysroot_cmd[FLUX_MAX_PATH_LEN * 2 + 32];
         snprintf(sysroot_cmd, sizeof(sysroot_cmd), "cp -a \"%s\"/. \"%s\"/", destdir, config.flux_cross_compile_sysroot);
