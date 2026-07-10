@@ -240,12 +240,6 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
 }
 
 int flux_cache_store(const char *key, const char *destdir, const char *secret_key_path) {
-    // no signing key on this machine
-    if (access(secret_key_path, R_OK) != 0) {
-        printf("[flux] no signing key at %s, skipping cache store\n", secret_key_path);
-        return FLUX_ERR_NONE;
-    }
-
     char archive[FLUX_MAX_PATH_LEN];
     snprintf(archive, sizeof(archive), "/var/cache/flux/%s.tar.zst", key);
 
@@ -257,6 +251,12 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: failed to create cache archive\n");
         return FLUX_ERR_CACHE;
+    }
+
+    // no signing key on this machine: leave the raw archive for manual transfer/signing elsewhere
+    if (access(secret_key_path, R_OK) != 0) {
+        printf("[flux] cached locally (unsigned, no signing key on this machine): %s\n", archive);
+        return FLUX_ERR_NONE;
     }
 
     // sign with minisign
