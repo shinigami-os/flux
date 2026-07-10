@@ -110,10 +110,10 @@ int flux_build(int argc, char **argv, const char *usage) {
 
         printf("[flux] cloning: %s\n", git_url);
         if (strlen(git_branch) > 0) {
-            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 --branch \"%s\" \"%s\" \"%s\"",
+            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 --recurse-submodules --shallow-submodules --branch \"%s\" \"%s\" \"%s\"",
                      build_dir, git_branch, git_url, build_dir);
         } else {
-            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 \"%s\" \"%s\"",
+            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 --recurse-submodules --shallow-submodules \"%s\" \"%s\"",
                      build_dir, git_url, build_dir);
         }
         if (system(cmd) != 0) {

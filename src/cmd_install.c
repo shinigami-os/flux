@@ -439,11 +439,11 @@ int flux_install(int argc, char **argv, const char *usage) {
         char clone_cmd[2048];
         if (strlen(git_branch) > 0) {
             snprintf(clone_cmd, sizeof(clone_cmd),
-                     "rm -rf \"%s\" && git clone --depth=1 --branch \"%s\" \"%s\" \"%s\"",
+                     "rm -rf \"%s\" && git clone --depth=1 --recurse-submodules --shallow-submodules --branch \"%s\" \"%s\" \"%s\"",
                      build_dir, git_branch, git_url, build_dir);
         } else {
             snprintf(clone_cmd, sizeof(clone_cmd),
-                     "rm -rf \"%s\" && git clone --depth=1 \"%s\" \"%s\"",
+                     "rm -rf \"%s\" && git clone --depth=1 --recurse-submodules --shallow-submodules \"%s\" \"%s\"",
                      build_dir, git_url, build_dir);
         }
         if (system(clone_cmd) != 0) {
