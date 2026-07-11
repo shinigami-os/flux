@@ -419,7 +419,7 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     // build from source
     char build_dir[256];
-    char tarball[256];
+    char tarball[512];
     char installed_files[FLUX_MAX_INSTALLED_FILES][FLUX_MAX_PATH_LEN];
     const char *file_ptrs[FLUX_MAX_INSTALLED_FILES];
     int file_count = 0;
@@ -484,7 +484,9 @@ int flux_install(int argc, char **argv, const char *usage) {
             }
         }
     } else if (has_source) {
-        snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s.tar.gz", pkg);
+        const char *url_basename = strrchr(recipe.url, '/');
+        url_basename = url_basename ? url_basename + 1 : recipe.url;
+        snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
         printf("[flux] fetching source: %s\n", recipe.url);
         if (fetch_source(recipe.url, tarball) != 0) {

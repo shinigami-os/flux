@@ -69,6 +69,8 @@ int main(int argc, char **argv) {
         return FLUX_ERR_USAGE;
     }
     char *command = argv[1];
+    if (strcmp(command, "--version") == 0 || strcmp(command, "-v") == 0)
+        command = "version";
     for(int i = 0; commands[i].handler != NULL; i++){
         if(strcmp(command, commands[i].name) == 0){
             return commands[i].handler(argc - 2, argv + 2, commands[i].usage);
