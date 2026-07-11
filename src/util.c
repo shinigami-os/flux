@@ -158,6 +158,36 @@ int flux_native_target(char *out, size_t outlen) {
     return FLUX_ERR_NONE;
 }
 
+int flux_is_archive_name(const char *name) {
+    static const char *exts[] = {
+        ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2",
+        ".tar.zst", ".tzst", ".tar", ".zip", NULL
+    };
+    size_t len = strlen(name);
+    for (int i = 0; exts[i]; i++) {
+        size_t elen = strlen(exts[i]);
+        if (len > elen && strcmp(name + len - elen, exts[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+// extracts a fetched source into dest, auto-detecting compression and stripping
+// the top dir for real archives. Single-file sources (e.g. a bare .ttf) aren't
+// archives at all, so they're just copied into dest under their original name.
+int flux_extract_source(const char *fetched_path, const char *dest) {
+    char cmd[768];
+    if (!flux_is_archive_name(fetched_path)) {
+        const char *base = strrchr(fetched_path, '/');
+        base = base ? base + 1 : fetched_path;
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && cp \"%s\" \"%s/%s\"",
+                 dest, dest, fetched_path, dest, base);
+        return system(cmd);
+    }
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
+             dest, dest, fetched_path, dest);
+    return system(cmd);
+}
+
 int flux_cache_key(const char *name, const char *version, const char *cflags, const char *target, char *out, size_t outlen) {
     // hash cflags alone for native builds (preserves existing cache keys),
     // append |target for cross builds so they get a distinct key

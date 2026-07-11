@@ -178,8 +178,7 @@ int flux_build(int argc, char **argv, const char *usage) {
 
         // extract
         printf("[flux] extracting...\n");
-        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", build_dir, build_dir, tarball, build_dir);
-        if (system(cmd) != 0) {
+        if (flux_extract_source(tarball, build_dir) != 0) {
             fprintf(stderr, "flux: failed to extract tarball\n");
             return FLUX_ERR_GENERAL;
         }

@@ -21,6 +21,8 @@ int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const 
 int flux_autoremove_orphans(int *removed_count);
 
 int flux_native_target(char *out, size_t outlen);
+int flux_is_archive_name(const char *name);
+int flux_extract_source(const char *fetched_path, const char *dest);
 int flux_cache_key(const char *name, const char *version, const char *cflags, const char *target, char *out, size_t outlen);
 int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen);
 int flux_cache_lookup_local(const char *key, char *path_out, size_t path_outlen);

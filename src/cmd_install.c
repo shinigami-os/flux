@@ -45,11 +45,11 @@ static int verify_sha256(const char *path, const char *expected) {
     return 0;
 }
 
-// extracts a fetched source tarball, auto-detects compression, strips the top dir
+// extracts a fetched source tarball, auto-detects compression, strips the top dir.
+// single-file sources (e.g. a bare .ttf) aren't archives at all, so flux_extract_source
+// just copies them into dest under their original name instead of running tar
 static int extract_tarball(const char *tarball, const char *dest) {
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1", dest, dest, tarball, dest);
-    return system(cmd);
+    return flux_extract_source(tarball, dest);
 }
 
 // runs only against the real root filesystem
