@@ -17,8 +17,15 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
         strip_newline(line);
         char *trimmed = trim_left(line);
 
-        // skip empty lines and comments
-        if (*trimmed == '\0' || *trimmed == '#') continue;
+        // skip empty lines and comments, but only outside hook bodies -
+        // a leading '#' inside %build/%pre-build/etc is legitimate content
+        // (a shell comment, or a C/C++ preprocessor directive embedded via
+        // heredoc), not a kotodama-level comment
+        int in_hook = (state == KOTO_HOOK_PRE_BUILD || state == KOTO_HOOK_BUILD ||
+                       state == KOTO_HOOK_POST_BUILD || state == KOTO_HOOK_INSTALL ||
+                       state == KOTO_HOOK_POST_INSTALL);
+        if (!in_hook && (*trimmed == '\0' || *trimmed == '#')) continue;
+        if (in_hook && *trimmed == '\0') continue;
 
         // detect section headers
         if (strcmp(trimmed, "[meta]") == 0) { state = KOTO_META; continue; }
