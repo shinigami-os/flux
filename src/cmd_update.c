@@ -9,6 +9,7 @@
 static void check_for_flux_release(void);
 static void check_for_base_release(void);
 static void check_for_kernel_release(const flux_config_t *config);
+static void update_flatpak(void);
 
 int flux_update(int argc, char **argv, const char *usage) {
     (void)argc;
@@ -63,10 +64,17 @@ int flux_update(int argc, char **argv, const char *usage) {
     }
     printf("[flux] recipe repo up to date\n");
 
+    update_flatpak();
     check_for_flux_release();
     check_for_base_release();
     check_for_kernel_release(&config);
     return FLUX_ERR_NONE;
+}
+
+static void update_flatpak(void) {
+    if (system("command -v flatpak >/dev/null 2>&1") != 0) return;
+    printf("[flux] updating flatpak apps...\n");
+    system("flatpak update -y");
 }
 
 static void check_for_flux_release(void) {
