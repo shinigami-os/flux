@@ -14,6 +14,57 @@ static int g_auto_installed = 0;
 static int g_yes = 0;
 static int g_force = 0;
 
+// When no flux recipe exists for pkg, check whether flatpak has a matching
+// app on its remotes and offer to install it there instead. Returns
+// FLUX_ERR_NOT_FOUND if flatpak isn't usable or nothing matched (caller
+// should fall through to the normal "no recipe found" error in that case).
+static int try_flatpak_fallback(const char *pkg) {
+    if (system("command -v flatpak >/dev/null 2>&1") != 0)
+        return FLUX_ERR_NOT_FOUND;
+
+    // remote-ls + grep works without needing a synced local appstream
+    // cache, unlike `flatpak search`, which is otherwise the more natural fit
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+        "flatpak remote-ls flathub --app --columns=application 2>/dev/null | grep -i \"%s\" | head -5",
+        pkg);
+    FILE *f = popen(cmd, "r");
+    if (!f) return FLUX_ERR_NOT_FOUND;
+
+    char matches[5][256];
+    int n = 0;
+    while (n < 5 && fgets(matches[n], sizeof(matches[n]), f)) {
+        strip_newline(matches[n]);
+        if (strlen(matches[n]) > 0) n++;
+    }
+    pclose(f);
+
+    if (n == 0) return FLUX_ERR_NOT_FOUND;
+
+    printf("\n[flux] no flux recipe found for '%s', but found on Flathub:\n", pkg);
+    for (int i = 0; i < n; i++)
+        printf("  %d. %s\n", i + 1, matches[i]);
+    printf("\nInstall %s via Flatpak? [y/N] ", matches[0]);
+
+    if (!g_yes) {
+        char answer[8] = {0};
+        if (!fgets(answer, sizeof(answer), stdin) || (answer[0] != 'y' && answer[0] != 'Y')) {
+            printf("Aborted.\n");
+            return FLUX_ERR_NONE;
+        }
+    } else {
+        printf("y\n");
+    }
+
+    char install_cmd[300];
+    snprintf(install_cmd, sizeof(install_cmd), "flatpak install -y flathub \"%s\"", matches[0]);
+    if (system(install_cmd) != 0) {
+        fprintf(stderr, "flux: flatpak install failed\n");
+        return FLUX_ERR_GENERAL;
+    }
+    return FLUX_ERR_NONE;
+}
+
 static int fetch_source(const char *url, const char *dest) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", dest, url);
@@ -246,6 +297,8 @@ int flux_install(int argc, char **argv, const char *usage) {
     char koto_path[FLUX_MAX_PATH_LEN * 2];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config.local_repo_path, pkg);
     if (stat(koto_path, &st) != 0) {
+        int fp_err = try_flatpak_fallback(pkg);
+        if (fp_err != FLUX_ERR_NOT_FOUND) return fp_err;
         fprintf(stderr, "flux: no recipe found for '%s'\n", pkg);
         return FLUX_ERR_NOT_FOUND;
     }
