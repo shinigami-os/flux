@@ -171,16 +171,33 @@ int flux_is_archive_name(const char *name) {
     return 0;
 }
 
+static int flux_is_zip_name(const char *name) {
+    size_t len = strlen(name);
+    return len > 4 && strcmp(name + len - 4, ".zip") == 0;
+}
+
 // extracts a fetched source into dest, auto-detecting compression and stripping
 // the top dir for real archives. Single-file sources (e.g. a bare .ttf) aren't
 // archives at all, so they're just copied into dest under their original name.
 int flux_extract_source(const char *fetched_path, const char *dest) {
-    char cmd[768];
+    char cmd[896];
     if (!flux_is_archive_name(fetched_path)) {
         const char *base = strrchr(fetched_path, '/');
         base = base ? base + 1 : fetched_path;
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && cp \"%s\" \"%s/%s\"",
                  dest, dest, fetched_path, dest, base);
+        return system(cmd);
+    }
+    if (flux_is_zip_name(fetched_path)) {
+        // unzip has no --strip-components equivalent, so extract to a scratch
+        // dir and move the single top-level directory's contents up into dest
+        snprintf(cmd, sizeof(cmd),
+            "rm -rf \"%s\" \"/tmp/flux_zip_extract\" && mkdir -p \"/tmp/flux_zip_extract\" \"%s\""
+            " && unzip -q \"%s\" -d \"/tmp/flux_zip_extract\""
+            " && mv /tmp/flux_zip_extract/*/* \"%s\"/ 2>/dev/null"
+            "; mv /tmp/flux_zip_extract/*/.[!.]* \"%s\"/ 2>/dev/null"
+            "; rm -rf \"/tmp/flux_zip_extract\"",
+            dest, dest, fetched_path, dest, dest);
         return system(cmd);
     }
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
