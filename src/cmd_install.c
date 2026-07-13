@@ -41,23 +41,52 @@ static int try_flatpak_fallback(const char *pkg) {
 
     if (n == 0) return FLUX_ERR_NOT_FOUND;
 
-    printf("\n[flux] no flux recipe found for '%s', but found on Flathub:\n", pkg);
-    for (int i = 0; i < n; i++)
-        printf("  %d. %s\n", i + 1, matches[i]);
-    printf("\nInstall %s via Flatpak? [y/N] ", matches[0]);
+    int chosen = 0; /* index into matches[] */
 
-    if (!g_yes) {
-        char answer[8] = {0};
-        if (!fgets(answer, sizeof(answer), stdin) || (answer[0] != 'y' && answer[0] != 'Y')) {
+    if (n == 1) {
+        printf("\n[flux] no flux recipe found for '%s', but found on Flathub: %s\n", pkg, matches[0]);
+        printf("Install via Flatpak? [y/N] ");
+        fflush(stdout);
+        if (!g_yes) {
+            char answer[8] = {0};
+            if (!fgets(answer, sizeof(answer), stdin) || (answer[0] != 'y' && answer[0] != 'Y')) {
+                printf("Aborted.\n");
+                return FLUX_ERR_NONE;
+            }
+        } else {
+            printf("y\n");
+        }
+    } else {
+        /* Multiple candidates: always ask which one explicitly, even with
+         * -y/--yes, since that flag skips a yes/no confirmation, not a pick
+         * among several different packages. */
+        printf("\n[flux] no flux recipe found for '%s', but found %d matches on Flathub:\n", pkg, n);
+        for (int i = 0; i < n; i++)
+            printf("  %d. %s\n", i + 1, matches[i]);
+        printf("Install which one? [1-%d, or n to abort] ", n);
+        fflush(stdout);
+
+        char answer[16] = {0};
+        if (!fgets(answer, sizeof(answer), stdin)) {
             printf("Aborted.\n");
             return FLUX_ERR_NONE;
         }
-    } else {
-        printf("y\n");
+        strip_newline(answer);
+        if (answer[0] == 'n' || answer[0] == 'N' || answer[0] == '\0') {
+            printf("Aborted.\n");
+            return FLUX_ERR_NONE;
+        }
+        char *endptr;
+        long pick = strtol(answer, &endptr, 10);
+        if (endptr == answer || pick < 1 || pick > n) {
+            fprintf(stderr, "flux: invalid choice\n");
+            return FLUX_ERR_NONE;
+        }
+        chosen = (int)(pick - 1);
     }
 
     char install_cmd[300];
-    snprintf(install_cmd, sizeof(install_cmd), "flatpak install -y flathub \"%s\"", matches[0]);
+    snprintf(install_cmd, sizeof(install_cmd), "flatpak install -y flathub \"%s\"", matches[chosen]);
     if (system(install_cmd) != 0) {
         fprintf(stderr, "flux: flatpak install failed\n");
         return FLUX_ERR_GENERAL;
@@ -384,6 +413,7 @@ int flux_install(int argc, char **argv, const char *usage) {
                 if (i < queue.count - 1) printf("  ");
             }
             printf("\n\nProceed? [Y/n] ");
+            fflush(stdout);
             if (g_yes) {
                 printf("Y\n");
             } else {
