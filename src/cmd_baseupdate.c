@@ -65,6 +65,59 @@ static int atomic_replace(const char *src, const char *dst) {
     return FLUX_ERR_NONE;
 }
 
+#define FLUX_MAX_BASE_SERVICES 64
+#define FLUX_BASE_SERVICES_RECORD "/var/lib/flux/kira-base-services"
+
+// Reconciles /etc/sv against the set of services kira-base itself ships
+// (declared via "service /etc/sv/NAME" manifest lines), without touching
+// service directories owned by flux packages (dbus, networkmanager, etc.),
+// which are tracked and managed entirely through their own package files list.
+static void sync_base_services(const char *rootfs_dir, char (*new_services)[FLUX_MAX_NAME_LEN], int new_count) {
+    FILE *rf = fopen(FLUX_BASE_SERVICES_RECORD, "r");
+    if (rf) {
+        char line[FLUX_MAX_NAME_LEN];
+        while (fgets(line, sizeof(line), rf)) {
+            strip_newline(line);
+            if (strlen(line) == 0) continue;
+
+            int still_shipped = 0;
+            for (int i = 0; i < new_count; i++) {
+                if (strcmp(line, new_services[i]) == 0) { still_shipped = 1; break; }
+            }
+            if (!still_shipped) {
+                printf("[flux] removing service no longer shipped by kira-base: %s\n", line);
+                char cmd[FLUX_MAX_PATH_LEN + 64];
+                snprintf(cmd, sizeof(cmd), "sv down /etc/sv/%s >/dev/null 2>&1; rm -rf /etc/sv/%s", line, line);
+                system(cmd);
+            }
+        }
+        fclose(rf);
+    }
+
+    for (int i = 0; i < new_count; i++) {
+        char src[FLUX_MAX_PATH_LEN + 32];
+        char dst[FLUX_MAX_PATH_LEN];
+        snprintf(src, sizeof(src), "%s/etc/sv/%s", rootfs_dir, new_services[i]);
+        snprintf(dst, sizeof(dst), "/etc/sv/%s", new_services[i]);
+
+        struct stat st;
+        if (stat(src, &st) != 0) continue;
+
+        char cmd[(FLUX_MAX_PATH_LEN + 32) * 3];
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && cp -a \"%s\" \"%s\"", dst, src, dst);
+        if (system(cmd) == 0)
+            printf("[flux] updated service /etc/sv/%s\n", new_services[i]);
+    }
+
+    mkdir("/var/lib/flux", 0755);
+    FILE *wf = fopen(FLUX_BASE_SERVICES_RECORD, "w");
+    if (wf) {
+        for (int i = 0; i < new_count; i++)
+            fprintf(wf, "%s\n", new_services[i]);
+        fclose(wf);
+    }
+}
+
 static void apply_manifest(const char *rootfs_dir, int *boot_pending) {
     char manifest_path[FLUX_MAX_PATH_LEN + 32];
     snprintf(manifest_path, sizeof(manifest_path), "%s/etc/kira-update-manifest", rootfs_dir);
@@ -74,6 +127,9 @@ static void apply_manifest(const char *rootfs_dir, int *boot_pending) {
         fprintf(stderr, "flux: kira-update-manifest missing from release, nothing applied\n");
         return;
     }
+
+    char base_services[FLUX_MAX_BASE_SERVICES][FLUX_MAX_NAME_LEN];
+    int base_service_count = 0;
 
     char line[300];
     while (fgets(line, sizeof(line), mf)) {
@@ -110,9 +166,19 @@ static void apply_manifest(const char *rootfs_dir, int *boot_pending) {
                 printf("[flux] staged %s (applies on next boot)\n", target);
                 *boot_pending = 1;
             }
+        } else if (strcmp(category, "service") == 0) {
+            if (base_service_count < FLUX_MAX_BASE_SERVICES) {
+                const char *name = strrchr(target, '/');
+                name = name ? name + 1 : target;
+                strncpy(base_services[base_service_count], name, FLUX_MAX_NAME_LEN - 1);
+                base_services[base_service_count][FLUX_MAX_NAME_LEN - 1] = '\0';
+                base_service_count++;
+            }
         }
     }
     fclose(mf);
+
+    sync_base_services(rootfs_dir, base_services, base_service_count);
 }
 
 static void apply_initramfs(const char *scratch, int *boot_pending) {
