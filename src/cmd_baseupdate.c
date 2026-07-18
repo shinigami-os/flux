@@ -105,8 +105,17 @@ static void sync_base_services(const char *rootfs_dir, char (*new_services)[FLUX
 
         char cmd[(FLUX_MAX_PATH_LEN + 32) * 3];
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && cp -a \"%s\" \"%s\"", dst, src, dst);
-        if (system(cmd) == 0)
+        if (system(cmd) == 0) {
             printf("[flux] updated service /etc/sv/%s\n", new_services[i]);
+            // kira-base ships getty-tty1 always enabled, but greetd's own
+            // %post-install disables it (they fight over tty1) - this
+            // wholesale restore just undid that, so redo it here too
+            if (strcmp(new_services[i], "getty-tty1") == 0) {
+                struct stat greetd_st;
+                if (stat("/etc/sv/greetd/run", &greetd_st) == 0)
+                    system("touch /etc/sv/getty-tty1/down; sv down /etc/sv/getty-tty1 >/dev/null 2>&1");
+            }
+        }
     }
 
     mkdir("/var/lib/flux", 0755);
