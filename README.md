@@ -34,6 +34,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux version` | Print the installed flux version |
 | `flux self-update` | Rebuild flux from the latest release tag and atomically replace the running binary |
 | `flux base-update` | Update kira-base's core image (musl, BusyBox, runit, eudev, curl) to the latest release |
+| `flux kernel-update [-f]` | Download, verify, extract, and boot-configure the latest Shinigami kernel release |
 
 ---
 
@@ -179,9 +180,13 @@ Cutting a release is just `git tag <version> && git push --tags` on the `flux` r
 
 The new `/boot/initrd.img-<kernel>` is staged the same way, always reboot-required. `flux base-update` tells you at the end whether a reboot is needed.
 
+## Kernel updates (`flux kernel-update`)
+
+The Shinigami kernel is versioned as `<linux-version>-shinigami-<shinigami-version>` (e.g. `7.1.3-shinigami-26.07-4`), read straight off `uname -r`. `flux kernel-update` compares that against `{binary_cache_url}/kira-kernel/latest`, and if there's a newer one: downloads `kira-kernel-<version>.tar.gz` + its `.minisig` from the cache, verifies the signature, extracts it directly onto `/`, runs `depmod -a <version>` to regenerate module dependencies, and updates GRUB if `grub-mkconfig`/`update-grub` is present. The previous kernel's `/lib/modules/<version>` directory is left in place for rollback. Like `base-update`, this never runs automatically (`flux update` just notices a newer version is available and tells you to run it), and it always ends by reporting that a reboot is required.
+
 ## Status
 
-Phase 2. `install`, `remove`, `autoremove`, `search`, `update`, `info`, `build`, `version`, `self-update`, `base-update` are fully working, including cross-compilation, real per-package dependency resolution, a local + remote binary cache, and a fully-implemented auto-installed/orphan tracking model. `compat` (Phase 3) is not yet implemented.
+Phase 3. `install`, `remove`, `autoremove`, `search`, `update`, `info`, `list`, `build`, `cache`, `version`, `self-update`, `base-update`, `kernel-update` are fully working, including cross-compilation, real per-package dependency resolution, a local + remote binary cache, and a fully-implemented auto-installed/orphan tracking model. `compat` (Debian compat container fallback) is still a stub, not yet implemented.
 
 See the [Kira Linux specification](https://github.com/shinigami-os) and the full project roadmap.
 
