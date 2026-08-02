@@ -24,7 +24,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux install <pkg>` | Install a package (from cache or compile from source) |
 | `flux remove [-a] <pkg>` | Remove a package and all its installed files. `-a`/`--autoremove` also removes now-orphaned auto-installed deps |
 | `flux autoremove` | Remove every installed package that's auto-installed and no longer needed by anything |
-| `flux update` | Sync the local recipe repo with the remote, and check for a newer flux or kira-base release |
+| `flux update [-i]` | Sync the local recipe repo, report which installed packages have a newer recipe version, and check for a newer flux or kira-base release. `-i` installs the reported updates. |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
 | `flux list [-a]` | List installed packages. `-a` to sort alphabetically, `-auto` to show auto-installed deps |
@@ -168,6 +168,12 @@ Exit codes are stable. They will not be renumbered.
 flux uses Kira's own release-based scheme, not semver: `YY.MM`, with an optional `-N` suffix for a hotfix release in that month (`26.06`, then `26.06-1` for the first hotfix). The version is a single compiled-in constant, `FLUX_VERSION` in `include/flux.h` - there's no separate VERSION file to drift out of sync with the binary.
 
 Cutting a release is just `git tag <version> && git push --tags` on the `flux` repo - no GitHub Release object needed. `flux update` and `flux self-update` read tags directly off the remote with `git ls-remote --tags`, pick the highest one with `sort -V`, and compare it against `FLUX_VERSION`. `flux update` just prints a notice if they differ; `flux self-update` does the actual rebuild-and-swap.
+
+## Package update reporting (`flux update` / `flux update -i`)
+
+`flux update` diffs the recipe repo's old and new `HEAD` after syncing (`git diff --name-only <old> <new> -- '*/kotodama'`) to find every recipe that changed. For each changed `<pkg>/kotodama`, if `pkg` is currently installed and its recorded version (`/var/lib/flux/installed/<pkg>/info`) differs from the version now in the recipe, it's reported as `pkg  old -> new`. Recipes that changed but aren't installed, or whose version didn't actually change (a comment tweak, a hook fix without a version bump), are not reported - this is meant to answer "what's outdated on my system," not "what changed upstream."
+
+Plain `flux update` only reports; `flux update -i` additionally force-reinstalls (`flux install -y -f`) every package it just reported, upgrading them to the recipe's current version.
 
 ## kira-base updates (`flux base-update`)
 

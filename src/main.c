@@ -31,7 +31,7 @@ flux_cmd_t commands[] = {
     {"build", flux_build, "Force local compilation regardless of cache", "flux build [--cross] <pkg>"},
     {"remove", flux_remove, "Remove a package, optionally its orphaned deps", "flux remove [-a] <pkg>"},
     {"autoremove", flux_autoremove, "Remove all orphaned auto-installed dependencies", "flux autoremove"},
-    {"update", flux_update, "Sync recipe repo and check for newer flux/kira-base releases", "flux update"},
+    {"update", flux_update, "Sync recipe repo, report package updates, and check for newer flux/kira-base releases", "flux update [-i]"},
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},
     {"list", flux_list, "List installed packages", "flux list [-a]"},
     {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
