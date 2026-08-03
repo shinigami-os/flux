@@ -197,8 +197,13 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
 
     int has_source = (strlen(recipe.url) != 0);
 
-    // meta-packages are never marked installed, always walked fresh
-    if (has_source && flux_db_is_installed(pkg)) return FLUX_ERR_NONE;
+    // meta-packages are never marked installed, always walked fresh.
+    // g_force only matters here for the root package of the current
+    // install: without it, force-reinstalling an already-installed
+    // package skips this walk entirely, so a dependency added by a
+    // newer recipe version (e.g. sleex gaining sleex-ui-kit) never
+    // gets pulled in even though the root itself gets rebuilt.
+    if (has_source && flux_db_is_installed(pkg) && !g_force) return FLUX_ERR_NONE;
 
     // decide whether THIS package needs its own build deps pulled in.
     int has_install_hook = (strlen(recipe.hook_install) != 0);
