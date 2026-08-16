@@ -39,31 +39,44 @@ int flux_update(int argc, char **argv, const char *usage) {
     int have_old_head = 0;
 
     if (stat(git_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        printf("[flux] downloading recipe repo...\n");
+        // self-heals a leftover tarball checkout from before git existed
+        if (system("command -v git >/dev/null 2>&1") == 0) {
+            printf("[flux] cloning recipe repo...\n");
 
-        char tmp_tar[FLUX_MAX_PATH_LEN];
-        snprintf(tmp_tar, sizeof(tmp_tar), "/tmp/flux-recipes.tar.gz");
+            char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
+            snprintf(cmd, sizeof(cmd),
+                    "rm -rf \"%s\" && git clone --depth 1 \"%s\" \"%s\"",
+                    config.local_repo_path, FLUX_RECIPES_REPO_URL, config.local_repo_path);
+            if (system(cmd) != 0) {
+                fprintf(stderr, "flux: failed to clone recipe repo\n");
+                return FLUX_ERR_NETWORK;
+            }
+        } else {
+            printf("[flux] downloading recipe repo...\n");
 
-        char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
-        snprintf(cmd, sizeof(cmd),
-                "curl -L -o \"%s\" \"https://github.com/shinigami-os/flux-recipes/archive/refs/heads/main.tar.gz\"",
-                tmp_tar);
-        if (system(cmd) != 0) {
-            fprintf(stderr, "flux: failed to download recipe repo\n");
-            return FLUX_ERR_NETWORK;
-        }
+            char tmp_tar[FLUX_MAX_PATH_LEN];
+            snprintf(tmp_tar, sizeof(tmp_tar), "/tmp/flux-recipes.tar.gz");
 
-        // create destination and extract
-        snprintf(cmd, sizeof(cmd),
-                "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
-                config.local_repo_path, tmp_tar, config.local_repo_path);
-        if (system(cmd) != 0) {
-            fprintf(stderr, "flux: failed to extract recipe repo\n");
+            char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
+            snprintf(cmd, sizeof(cmd),
+                    "curl -L -o \"%s\" \"%s/archive/refs/heads/main.tar.gz\"",
+                    tmp_tar, FLUX_RECIPES_REPO_URL);
+            if (system(cmd) != 0) {
+                fprintf(stderr, "flux: failed to download recipe repo\n");
+                return FLUX_ERR_NETWORK;
+            }
+
+            snprintf(cmd, sizeof(cmd),
+                    "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
+                    config.local_repo_path, tmp_tar, config.local_repo_path);
+            if (system(cmd) != 0) {
+                fprintf(stderr, "flux: failed to extract recipe repo\n");
+                remove(tmp_tar);
+                return FLUX_ERR_GENERAL;
+            }
+
             remove(tmp_tar);
-            return FLUX_ERR_GENERAL;
         }
-
-        remove(tmp_tar);
     }
     else{
         have_old_head = (get_git_head(config.local_repo_path, old_head, sizeof(old_head)) == FLUX_ERR_NONE);
@@ -128,12 +141,7 @@ static int get_git_head(const char *repo_path, char *out, size_t outlen) {
     return strlen(out) > 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
 }
 
-// Diffs old_head..new_head for changed "<pkg>/kotodama" files, and for each
-// package that's currently installed with a different version than the
-// freshly-pulled recipe now on disk, prints the change and adds it to
-// outdated[]. Recipes that changed but were never installed, or whose
-// version didn't actually change, are not reported - "update available"
-// should only mean something for packages actually on this system.
+// only reports changed <pkg>/kotodama files where pkg is installed and its version actually changed - "update available" should only mean something for packages on this system
 static int report_and_collect_updates(const flux_config_t *config, const char *old_head, const char *new_head,
                                        char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
     *count = 0;

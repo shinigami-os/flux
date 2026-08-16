@@ -87,7 +87,6 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
         return FLUX_ERR_GENERAL;
     }
 
-    // write info file
     char info_path[FLUX_MAX_PATH_LEN + 8];
     snprintf(info_path, sizeof(info_path), "%s/info", dir);
     FILE *f = fopen(info_path, "w");
@@ -98,7 +97,6 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     fprintf(f, "auto_installed = %d\n", info->auto_installed);
     fclose(f);
 
-    // write files list
     char files_path[FLUX_MAX_PATH_LEN + 8];
     snprintf(files_path, sizeof(files_path), "%s/files", dir);
     f = fopen(files_path, "w");
@@ -126,7 +124,6 @@ int flux_db_remove(const char *name) {
     snprintf(info_path, sizeof(info_path), "/var/lib/flux/installed/%s/info", name);
     snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", name);
 
-    // read and delete each installed file
     FILE *f = fopen(files_path, "r");
     if (f) {
         char line[512];
@@ -176,9 +173,7 @@ static int flux_is_zip_name(const char *name) {
     return len > 4 && strcmp(name + len - 4, ".zip") == 0;
 }
 
-// extracts a fetched source into dest, auto-detecting compression and stripping
-// the top dir for real archives. Single-file sources (e.g. a bare .ttf) aren't
-// archives at all, so they're just copied into dest under their original name.
+// single-file sources (e.g. a bare .ttf) aren't archives, so they're just copied into dest under their original name instead of extracted
 int flux_extract_source(const char *fetched_path, const char *dest) {
     char cmd[896];
     if (!flux_is_archive_name(fetched_path)) {
@@ -189,8 +184,7 @@ int flux_extract_source(const char *fetched_path, const char *dest) {
         return system(cmd);
     }
     if (flux_is_zip_name(fetched_path)) {
-        // unzip has no --strip-components equivalent, so extract to a scratch
-        // dir and move the single top-level directory's contents up into dest
+        // unzip has no --strip-components equivalent, so extract to a scratch dir and move the top-level directory's contents up into dest
         snprintf(cmd, sizeof(cmd),
             "rm -rf \"%s\" \"/tmp/flux_zip_extract\" && mkdir -p \"/tmp/flux_zip_extract\" \"%s\""
             " && unzip -q \"%s\" -d \"/tmp/flux_zip_extract\""
@@ -206,8 +200,7 @@ int flux_extract_source(const char *fetched_path, const char *dest) {
 }
 
 int flux_cache_key(const char *name, const char *version, const char *cflags, const char *target, char *out, size_t outlen) {
-    // hash cflags alone for native builds (preserves existing cache keys),
-    // append |target for cross builds so they get a distinct key
+    // hash cflags alone for native builds to preserve existing cache keys; append |target only for cross builds
     char input[FLUX_MAX_CFLAGS_LEN + 64];
     if (target && target[0] != '\0')
         snprintf(input, sizeof(input), "%s|%s", cflags, target);
@@ -226,7 +219,6 @@ int flux_cache_key(const char *name, const char *version, const char *cflags, co
     }
     pclose(f);
 
-    // strip any trailing whitespace/newline from hash
     strip_newline(hash);
     trim_right(hash);
 
@@ -244,17 +236,14 @@ int flux_cache_lookup_local(const char *key, char *path_out, size_t path_outlen)
 int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     snprintf(path_out, path_outlen, "/var/cache/flux/%s.tar.zst", key);
 
-    // check local cache first
     struct stat st;
     if (stat(path_out, &st) == 0) return FLUX_ERR_NONE;
 
-    // local miss: try remote cache
     flux_config_t config;
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_NOT_FOUND;
     if (strlen(config.binary_cache_url) == 0) return FLUX_ERR_NOT_FOUND;
 
-    // check remote cache by attempting a HEAD request
     char remote_url[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN];
     snprintf(remote_url, sizeof(remote_url), "%s/packages/%s.tar.zst", config.binary_cache_url, key);
     char check_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
@@ -266,14 +255,12 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
 
     char dl_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
 
-    // download archive
     snprintf(dl_cmd, sizeof(dl_cmd), "curl -L --max-time 3600 --retry 3 -o \"%s\" \"%s/packages/%s.tar.zst\"", path_out, config.binary_cache_url, key);
     if (system(dl_cmd) != 0) {
         remove(path_out);
         return FLUX_ERR_NOT_FOUND;
     }
 
-    // download signature
     char sig_path[FLUX_MAX_PATH_LEN + 8];
     snprintf(sig_path, sizeof(sig_path), "%s.minisig", path_out);
     snprintf(dl_cmd, sizeof(dl_cmd), "curl -s -L -o \"%s\" \"%s/packages/%s.tar.zst.minisig\"", sig_path, config.binary_cache_url, key);
@@ -292,7 +279,6 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
 
     system("mkdir -p /var/cache/flux");
 
-    // package destdir into tar.zst
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | zstd -o \"%s\"", destdir, archive);
     if (system(cmd) != 0) {
@@ -306,7 +292,6 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
         return FLUX_ERR_NONE;
     }
 
-    // sign with minisign
     snprintf(cmd, sizeof(cmd), "minisign -Sm \"%s\" -s \"%s\" -W", archive, secret_key_path);
     if (system(cmd) != 0) {
         fprintf(stderr, "flux: failed to sign cache archive\n");
@@ -418,8 +403,7 @@ int flux_autoremove_orphans(int *removed_count) {
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
-    // repeat until a full pass removes nothing, so a chain of
-    // now-orphaned auto-installed deps gets cleaned up in one call
+    // repeat until a pass removes nothing, so a chain of newly-orphaned deps gets cleaned up in one call
     for (int pass = 0; pass < 50; pass++) {
         char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
         int count = 0;

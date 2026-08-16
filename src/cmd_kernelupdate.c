@@ -7,8 +7,6 @@
 #include "../include/flux.h"
 #include "../include/util.h"
 
-// reads the running kernel version from uname -r
-// format: 6.12.85-shinigami-26.07
 static int read_current_kernel(char *out, size_t outlen) {
     FILE *f = popen("uname -r", "r");
     if (!f) return FLUX_ERR_GENERAL;
@@ -19,7 +17,6 @@ static int read_current_kernel(char *out, size_t outlen) {
     return strlen(out) > 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
 }
 
-// fetches {cache_url}/kira-kernel/latest into out
 int flux_fetch_latest_kernel_version(const char *cache_url, char *out, size_t outlen) {
     char url[FLUX_MAX_URL_LEN + 32];
     snprintf(url, sizeof(url), "%s/kira-kernel/latest", cache_url);
@@ -151,20 +148,17 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
         return FLUX_ERR_GENERAL;
     }
 
-    // regenerate module dependency files for the new kernel
     printf("[flux] running depmod...\n");
     snprintf(cmd, sizeof(cmd), "depmod -a \"%s\"", latest);
     if (system(cmd) != 0)
         printf("[flux] warning: depmod failed — modprobe may not find all modules\n");
 
-    // note old modules directory for rollback awareness
     struct stat old_mod_st;
     char old_modules_path[256];
     snprintf(old_modules_path, sizeof(old_modules_path), "/lib/modules/%s", current);
     if (strcmp(current, latest) != 0 && stat(old_modules_path, &old_mod_st) == 0)
         printf("[flux] old modules kept at %s (for rollback)\n", old_modules_path);
 
-    // update bootloader if grub is present
     if (system("command -v grub-mkconfig >/dev/null 2>&1") == 0) {
         printf("[flux] updating grub...\n");
         system("grub-mkconfig -o /boot/grub/grub.cfg");

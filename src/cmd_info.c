@@ -16,7 +16,6 @@ int flux_info(int argc, char **argv, const char *usage) {
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
-    // try to find the recipe
     char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config.local_repo_path, pkg);
 

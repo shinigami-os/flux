@@ -14,16 +14,12 @@ static int g_auto_installed = 0;
 static int g_yes = 0;
 static int g_force = 0;
 
-// When no flux recipe exists for pkg, check whether flatpak has a matching
-// app on its remotes and offer to install it there instead. Returns
-// FLUX_ERR_NOT_FOUND if flatpak isn't usable or nothing matched (caller
-// should fall through to the normal "no recipe found" error in that case).
+// returns FLUX_ERR_NOT_FOUND if flatpak is unusable or nothing matched, so the caller falls through to its own "no recipe found" error
 static int try_flatpak_fallback(const char *pkg) {
     if (system("command -v flatpak >/dev/null 2>&1") != 0)
         return FLUX_ERR_NOT_FOUND;
 
-    // remote-ls + grep works without needing a synced local appstream
-    // cache, unlike `flatpak search`, which is otherwise the more natural fit
+    // remote-ls + grep works without a synced local appstream cache, unlike the otherwise more natural `flatpak search`
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
         "flatpak remote-ls flathub --app --columns=application 2>/dev/null | grep -i \"%s\" | head -5",
@@ -41,7 +37,7 @@ static int try_flatpak_fallback(const char *pkg) {
 
     if (n == 0) return FLUX_ERR_NOT_FOUND;
 
-    int chosen = 0; /* index into matches[] */
+    int chosen = 0;
 
     if (n == 1) {
         printf("\n[flux] no flux recipe found for '%s', but found on Flathub: %s\n", pkg, matches[0]);
@@ -57,9 +53,7 @@ static int try_flatpak_fallback(const char *pkg) {
             printf("y\n");
         }
     } else {
-        /* Multiple candidates: always ask which one explicitly, even with
-         * -y/--yes, since that flag skips a yes/no confirmation, not a pick
-         * among several different packages. */
+        // always ask which one explicitly, even with -y/--yes, since that flag skips a yes/no confirmation, not a pick among several packages
         printf("\n[flux] no flux recipe found for '%s', but found %d matches on Flathub:\n", pkg, n);
         for (int i = 0; i < n; i++)
             printf("  %d. %s\n", i + 1, matches[i]);
@@ -125,9 +119,6 @@ static int verify_sha256(const char *path, const char *expected) {
     return 0;
 }
 
-// extracts a fetched source tarball, auto-detects compression, strips the top dir.
-// single-file sources (e.g. a bare .ttf) aren't archives at all, so flux_extract_source
-// just copies them into dest under their original name instead of running tar
 static int extract_tarball(const char *tarball, const char *dest) {
     return flux_extract_source(tarball, dest);
 }
@@ -197,12 +188,7 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
 
     int has_source = (strlen(recipe.url) != 0);
 
-    // meta-packages are never marked installed, always walked fresh.
-    // g_force only matters here for the root package of the current
-    // install: without it, force-reinstalling an already-installed
-    // package skips this walk entirely, so a dependency added by a
-    // newer recipe version (e.g. sleex gaining sleex-ui-kit) never
-    // gets pulled in even though the root itself gets rebuilt.
+    // g_force is only set for the root package, which is what makes a force-reinstall still walk its current deps and pick up ones a newer recipe version added (e.g. sleex gaining sleex-ui-kit)
     if (has_source && flux_db_is_installed(pkg) && !g_force) return FLUX_ERR_NONE;
 
     // decide whether THIS package needs its own build deps pulled in.
@@ -352,8 +338,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     // pure meta-package: no source to fetch and no install hook to run
     int pure_meta = !has_source && !has_install_hook;
 
-    // meta-packages are never marked installed, they're a list to process,
-    // always re-walked so their deps and hooks can pick up changes.
+    // meta-packages are never marked installed; they're always re-walked so their deps and hooks can pick up changes
     if (has_source && flux_db_is_installed(pkg) && !g_force) {
         if (!g_auto_installed) flux_db_set_auto_installed(pkg, 0);
         printf("[flux] %s is already installed\n", pkg);
@@ -395,7 +380,6 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
     }
 
-    // dep resolution is now done per-package inside collect_deps
     if (!g_auto_installed) {
         flux_install_queue_t queue;
         memset(&queue, 0, sizeof(queue));
@@ -450,7 +434,6 @@ int flux_install(int argc, char **argv, const char *usage) {
         g_force = saved_force;
     }
 
-    // install from cache
     if (cache_hit) {
         if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
             fprintf(stderr, "flux: failed to copy cached files to system\n");
@@ -485,7 +468,6 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    // pure meta-package: dep registration plus an optional post-install hook
     if (pure_meta) {
         if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
             fprintf(stderr, "flux: post-install failed\n");
@@ -505,7 +487,6 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NONE;
     }
 
-    // build from source
     char build_dir[256];
     char tarball[512];
     char installed_files[FLUX_MAX_INSTALLED_FILES][FLUX_MAX_PATH_LEN];
@@ -632,7 +613,6 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
 
-    // register in package db
     flux_pkg_info_t info;
     time_t now = time(NULL);
     struct tm *t = localtime(&now);

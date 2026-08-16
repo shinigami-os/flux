@@ -17,30 +17,24 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
         strip_newline(line);
         char *trimmed = trim_left(line);
 
-        // skip empty lines and comments, but only outside hook bodies -
-        // a leading '#' inside %build/%pre-build/etc is legitimate content
-        // (a shell comment, or a C/C++ preprocessor directive embedded via
-        // heredoc), not a kotodama-level comment
+        // outside hook bodies a leading '#' is a comment; inside one it's legitimate content (shell comment, embedded cpp directive, etc.)
         int in_hook = (state == KOTO_HOOK_PRE_BUILD || state == KOTO_HOOK_BUILD ||
                        state == KOTO_HOOK_POST_BUILD || state == KOTO_HOOK_INSTALL ||
                        state == KOTO_HOOK_POST_INSTALL);
         if (!in_hook && (*trimmed == '\0' || *trimmed == '#')) continue;
         if (in_hook && *trimmed == '\0') continue;
 
-        // detect section headers
         if (strcmp(trimmed, "[meta]") == 0) { state = KOTO_META; continue; }
         if (strcmp(trimmed, "[source]") == 0) { state = KOTO_SOURCE; continue; }
         if (strcmp(trimmed, "[deps]") == 0) { state = KOTO_DEPS; continue; }
         if (strcmp(trimmed, "[build]") == 0) { state = KOTO_BUILD; continue; }
 
-        // detect hook headers
         if (strcmp(trimmed, "%pre-build") == 0) { state = KOTO_HOOK_PRE_BUILD; continue; }
         if (strcmp(trimmed, "%build") == 0) { state = KOTO_HOOK_BUILD; continue; }
         if (strcmp(trimmed, "%post-build") == 0) { state = KOTO_HOOK_POST_BUILD; continue; }
         if (strcmp(trimmed, "%install") == 0) { state = KOTO_HOOK_INSTALL; continue; }
         if (strcmp(trimmed, "%post-install") == 0) { state = KOTO_HOOK_POST_INSTALL; continue; }
 
-        // hook content: append line to the right buffer
         if (state == KOTO_HOOK_PRE_BUILD) {
             strncat(recipe->hook_pre_build, trimmed, FLUX_MAX_HOOK_LEN - strlen(recipe->hook_pre_build) - 1);
             strncat(recipe->hook_pre_build, "\n", FLUX_MAX_HOOK_LEN - strlen(recipe->hook_pre_build) - 1);
@@ -67,7 +61,6 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
             continue;
         }
 
-        // key = value parsing
         char *eq = strchr(trimmed, '=');
         if (!eq) continue;
 

@@ -9,7 +9,7 @@ static int cmp_names(const void *a, const void *b) {
 }
 
 int flux_list(int argc, char **argv, const char *usage) {
-    int show_auto = 0;  /* -a: include auto-installed packages in the listing */
+    int show_auto = 0;
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--auto") == 0) {
             show_auto = 1;

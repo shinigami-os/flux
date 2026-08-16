@@ -28,12 +28,10 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     printf("[flux] building: %s\n", pkg);
 
-    // load config
     flux_config_t config;
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
-    // find kotodama
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
         fprintf(stderr, "flux: recipe repo not found at %s\n", config.local_repo_path);
@@ -48,7 +46,6 @@ int flux_build(int argc, char **argv, const char *usage) {
         return FLUX_ERR_NOT_FOUND;
     }
 
-    // parse recipe
     flux_recipe_t recipe;
     memset(&recipe, 0, sizeof(recipe));
     if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return FLUX_ERR_KOTODAMA;
@@ -159,7 +156,6 @@ int flux_build(int argc, char **argv, const char *usage) {
             return FLUX_ERR_NETWORK;
         }
 
-        // verify sha256
         printf("[flux] verifying checksum...\n");
         char sha_cmd[640];
         snprintf(sha_cmd, sizeof(sha_cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", tarball);
@@ -176,7 +172,6 @@ int flux_build(int argc, char **argv, const char *usage) {
             return FLUX_ERR_GENERAL;
         }
 
-        // extract
         printf("[flux] extracting...\n");
         if (flux_extract_source(tarball, build_dir) != 0) {
             fprintf(stderr, "flux: failed to extract tarball\n");
@@ -187,7 +182,6 @@ int flux_build(int argc, char **argv, const char *usage) {
         system(cmd);
     }
 
-    // run hooks
     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
     system(cmd);
 
@@ -205,7 +199,6 @@ int flux_build(int argc, char **argv, const char *usage) {
     char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
 
-    // helper: write and run a hook script
     #define RUN_HOOK(hook, label) do { \
         if (strlen(hook) > 0) { \
             char _script[FLUX_MAX_PATH_LEN + 16]; \
@@ -255,10 +248,7 @@ int flux_build(int argc, char **argv, const char *usage) {
     RUN_HOOK(recipe.hook_install, "install");
 
     if (!is_meta && cross && strlen(config.flux_cross_compile_sysroot) > 0) {
-        // libtool records dependency paths it discovered via PKG_CONFIG_LIBDIR
-        // pointing at the cross-sysroot directly into .la files' dependency_libs;
-        // those dev-machine-only paths are wrong once this package ships to the
-        // real target, which has its deps under plain /usr/lib instead
+        // libtool bakes cross-sysroot paths from PKG_CONFIG_LIBDIR into .la dependency_libs; strip them since the target has its deps under plain /usr/lib
         char destdir_la_patch[FLUX_MAX_PATH_LEN * 2 + 128];
         snprintf(destdir_la_patch, sizeof(destdir_la_patch),
             "find \"%s\" -name \"*.la\" | xargs -r sed -i"
@@ -299,7 +289,6 @@ int flux_build(int argc, char **argv, const char *usage) {
         }
     }
 
-    // cleanup
     char cleanup[1280];
     if (strlen(tarball) > 0) {
         snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\"", build_dir, destdir, tarball);

@@ -68,10 +68,7 @@ static int atomic_replace(const char *src, const char *dst) {
 #define FLUX_MAX_BASE_SERVICES 64
 #define FLUX_BASE_SERVICES_RECORD "/var/lib/flux/kira-base-services"
 
-// Reconciles /etc/sv against the set of services kira-base itself ships
-// (declared via "service /etc/sv/NAME" manifest lines), without touching
-// service directories owned by flux packages (dbus, networkmanager, etc.),
-// which are tracked and managed entirely through their own package files list.
+// reconciles /etc/sv against kira-base's shipped services only, leaving flux-package-owned service dirs (dbus, networkmanager, etc.) untouched
 static void sync_base_services(const char *rootfs_dir, char (*new_services)[FLUX_MAX_NAME_LEN], int new_count) {
     FILE *rf = fopen(FLUX_BASE_SERVICES_RECORD, "r");
     if (rf) {
@@ -107,9 +104,7 @@ static void sync_base_services(const char *rootfs_dir, char (*new_services)[FLUX
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && cp -a \"%s\" \"%s\"", dst, src, dst);
         if (system(cmd) == 0) {
             printf("[flux] updated service /etc/sv/%s\n", new_services[i]);
-            // kira-base ships getty-tty1 always enabled, but greetd's own
-            // %post-install disables it (they fight over tty1) - this
-            // wholesale restore just undid that, so redo it here too
+            // greetd's %post-install disables getty-tty1 (they fight over tty1); redo that here since this restore just undid it
             if (strcmp(new_services[i], "getty-tty1") == 0) {
                 struct stat greetd_st;
                 if (stat("/etc/sv/greetd/run", &greetd_st) == 0)
