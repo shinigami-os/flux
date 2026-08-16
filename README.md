@@ -21,15 +21,15 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 
 | Command | Action |
 |---|---|
-| `flux install <pkg>` | Install a package (from cache or compile from source) |
+| `flux install <pkg>` | Install a package (from cache or compile from source). If no recipe exists, offers to install a matching app from Flathub instead |
 | `flux remove [-a] <pkg>` | Remove a package and all its installed files. `-a`/`--autoremove` also removes now-orphaned auto-installed deps |
 | `flux autoremove` | Remove every installed package that's auto-installed and no longer needed by anything |
 | `flux update [-i]` | Sync the local recipe repo, report which installed packages have a newer recipe version, and check for a newer flux or kira-base release. `-i` installs the reported updates. |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
-| `flux list [-a]` | List installed packages. `-a` to sort alphabetically, `-auto` to show auto-installed deps |
+| `flux list [-a]` | List installed packages, sorted alphabetically. `-a`/`--auto` also includes auto-installed deps |
 | `flux build [--cross] <pkg>` | Force local compilation, optionally against the cross sysroot |
-| `flux cache <subcommand>` | Manage binary cache |
+| `flux cache clean [--all\|--unused]` | Manage the local binary cache (not yet implemented, stub) |
 | `flux compat <pkg>` | Install via Debian compat container (Phase 3) |
 | `flux version` | Print the installed flux version |
 | `flux self-update` | Rebuild flux from the latest release tag and atomically replace the running binary |
@@ -78,6 +78,10 @@ make DESTDIR=$DESTDIR install
 flux sets `$DESTDIR` before running `%install`. Recipes install into `$DESTDIR`, flux copies to the live system.
 
 `%post-install` is a fifth, optional hook that runs only during `flux install`, never `flux build`, and operates directly on the real root filesystem instead of `$DESTDIR`. It exists for idempotent system-level mutations that can't be expressed as installed files, like creating a system user. Never write to `$DESTDIR` in this hook, absolute paths here mean the real system.
+
+### Source types
+
+`[source] url` accepts three forms: a direct tarball URL (`sha256` is its real checksum), a bare non-archive file such as a `.ttf` (copied into the build dir under its original name instead of extracted), or `git+<repo>#<ref>` (shallow-cloned; when `<ref>` is a floating branch rather than a tag, `sha256` is repurposed to hold a pinned commit hash instead of a tarball checksum).
 
 ### Meta-packages
 
