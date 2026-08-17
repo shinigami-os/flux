@@ -38,21 +38,23 @@ int flux_update(int argc, char **argv, const char *usage) {
     char old_head[64] = {0};
     int have_old_head = 0;
 
+    flux_action("Updating Kira Linux");
+
     if (stat(git_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
         // self-heals a leftover tarball checkout from before git existed
         if (system("command -v git >/dev/null 2>&1") == 0) {
-            printf("[flux] cloning recipe repo...\n");
+            flux_step("cloning recipe repo...");
 
             char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
             snprintf(cmd, sizeof(cmd),
                     "rm -rf \"%s\" && git clone --depth 1 \"%s\" \"%s\"",
                     config.local_repo_path, FLUX_RECIPES_REPO_URL, config.local_repo_path);
             if (system(cmd) != 0) {
-                fprintf(stderr, "flux: failed to clone recipe repo\n");
+                flux_err("failed to clone recipe repo");
                 return FLUX_ERR_NETWORK;
             }
         } else {
-            printf("[flux] downloading recipe repo...\n");
+            flux_step("downloading recipe repo...");
 
             char tmp_tar[FLUX_MAX_PATH_LEN];
             snprintf(tmp_tar, sizeof(tmp_tar), "/tmp/flux-recipes.tar.gz");
@@ -62,7 +64,7 @@ int flux_update(int argc, char **argv, const char *usage) {
                     "curl -L -o \"%s\" \"%s/archive/refs/heads/main.tar.gz\"",
                     tmp_tar, FLUX_RECIPES_REPO_URL);
             if (system(cmd) != 0) {
-                fprintf(stderr, "flux: failed to download recipe repo\n");
+                flux_err("failed to download recipe repo");
                 return FLUX_ERR_NETWORK;
             }
 
@@ -70,7 +72,7 @@ int flux_update(int argc, char **argv, const char *usage) {
                     "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
                     config.local_repo_path, tmp_tar, config.local_repo_path);
             if (system(cmd) != 0) {
-                fprintf(stderr, "flux: failed to extract recipe repo\n");
+                flux_err("failed to extract recipe repo");
                 remove(tmp_tar);
                 return FLUX_ERR_GENERAL;
             }
@@ -81,18 +83,18 @@ int flux_update(int argc, char **argv, const char *usage) {
     else{
         have_old_head = (get_git_head(config.local_repo_path, old_head, sizeof(old_head)) == FLUX_ERR_NONE);
 
-        printf("[flux] syncing recipe repo...\n");
+        flux_step("syncing recipe repo...");
 
         char cmd[FLUX_MAX_PATH_LEN + 32];
         snprintf(cmd, sizeof(cmd), "git -C \"%s\" pull", config.local_repo_path);
 
         int ret = system(cmd);
         if (ret != 0) {
-            fprintf(stderr, "flux: failed to sync recipe repo\n");
+            flux_err("failed to sync recipe repo");
             return FLUX_ERR_NETWORK;
         }
     }
-    printf("[flux] recipe repo up to date\n");
+    flux_ok("recipe repo up to date");
 
     if (have_old_head) {
         char new_head[64] = {0};
@@ -105,19 +107,19 @@ int flux_update(int argc, char **argv, const char *usage) {
 
             if (outdated_count > 0) {
                 if (install_updates) {
-                    printf("\n[flux] installing %d update%s...\n", outdated_count, outdated_count == 1 ? "" : "s");
+                    flux_action("Installing %d update%s", outdated_count, outdated_count == 1 ? "" : "s");
                     for (int i = 0; i < outdated_count; i++) {
                         char *install_argv[] = { "-y", "-f", outdated[i] };
                         int err = flux_install(3, install_argv, "flux install [-y] [-f] <pkg>");
                         if (err != FLUX_ERR_NONE)
-                            fprintf(stderr, "flux: failed to update '%s'\n", outdated[i]);
+                            flux_err("failed to update '%s'", outdated[i]);
                     }
                 } else {
-                    printf("\n[flux] run 'flux update -i' to install %s\n",
+                    printf("\nRun 'flux update -i' to install %s.\n",
                            outdated_count == 1 ? "it" : "them");
                 }
             } else {
-                printf("[flux] no installed packages have available updates\n");
+                flux_ok("no installed packages have available updates");
             }
         }
     }
@@ -153,7 +155,7 @@ static int report_and_collect_updates(const flux_config_t *config, const char *o
     if (!f) return FLUX_ERR_GENERAL;
 
     char line[FLUX_MAX_PATH_LEN];
-    int printed_header = 0;
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
     while (*count < max && fgets(line, sizeof(line), f)) {
         strip_newline(line);
         char *slash = strchr(line, '/');
@@ -174,22 +176,25 @@ static int report_and_collect_updates(const flux_config_t *config, const char *o
 
         if (strcmp(info.version, recipe.version) == 0) continue;
 
-        if (!printed_header) {
-            printf("\n[flux] updates available:\n");
-            printed_header = 1;
-        }
-        printf("  %-32s %s -> %s\n", pkg, info.version, recipe.version);
-
+        strncpy(rows[*count].col1, pkg, FLUX_MAX_NAME_LEN - 1);
+        snprintf(rows[*count].col2, sizeof(rows[*count].col2), "%s -> %s", info.version, recipe.version);
         strncpy(outdated[*count], pkg, FLUX_MAX_NAME_LEN - 1);
         (*count)++;
     }
     pclose(f);
+
+    if (*count > 0) {
+        char title[64];
+        snprintf(title, sizeof(title), "%d update%s available", *count, *count == 1 ? "" : "s");
+        printf("\n");
+        flux_print_table(title, rows, *count);
+    }
     return FLUX_ERR_NONE;
 }
 
 static void update_flatpak(void) {
     if (system("command -v flatpak >/dev/null 2>&1") != 0) return;
-    printf("[flux] updating flatpak apps...\n");
+    flux_step("updating flatpak apps...");
     system("flatpak update -y");
 }
 
@@ -199,8 +204,8 @@ static void check_for_flux_release(void) {
 
     const char *version = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
     if (strcmp(version, FLUX_VERSION) != 0) {
-        printf("[flux] a newer flux release is available: %s (current: %s)\n", version, FLUX_VERSION);
-        printf("[flux] run 'flux self-update' to update\n");
+        flux_warn("a newer flux release is available: %s (current: %s)", version, FLUX_VERSION);
+        printf("  run 'flux self-update' to update\n");
     }
 }
 
@@ -225,8 +230,8 @@ static void check_for_base_release(void) {
 
     const char *version = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
     if (strcmp(version, current) != 0) {
-        printf("[flux] a newer kira-base release is available: %s (current: %s)\n", version, current);
-        printf("[flux] run 'flux base-update' to update\n");
+        flux_warn("a newer kira-base release is available: %s (current: %s)", version, current);
+        printf("  run 'flux base-update' to update\n");
     }
 }
 
@@ -245,7 +250,7 @@ static void check_for_kernel_release(const flux_config_t *config) {
     if (flux_fetch_latest_kernel_version(config->binary_cache_url, latest, sizeof(latest)) != FLUX_ERR_NONE) return;
 
     if (strcmp(current, latest) != 0) {
-        printf("[flux] a newer kernel is available: %s (current: %s)\n", latest, current);
-        printf("[flux] run 'flux kernel-update' to update\n");
+        flux_warn("a newer kernel is available: %s (current: %s)", latest, current);
+        printf("  run 'flux kernel-update' to update\n");
     }
 }

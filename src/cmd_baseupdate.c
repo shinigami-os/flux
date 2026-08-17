@@ -82,7 +82,7 @@ static void sync_base_services(const char *rootfs_dir, char (*new_services)[FLUX
                 if (strcmp(line, new_services[i]) == 0) { still_shipped = 1; break; }
             }
             if (!still_shipped) {
-                printf("[flux] removing service no longer shipped by kira-base: %s\n", line);
+                flux_step("removing service no longer shipped by kira-base: %s", line);
                 char cmd[FLUX_MAX_PATH_LEN + 64];
                 snprintf(cmd, sizeof(cmd), "sv down /etc/sv/%s >/dev/null 2>&1; rm -rf /etc/sv/%s", line, line);
                 system(cmd);
@@ -103,7 +103,7 @@ static void sync_base_services(const char *rootfs_dir, char (*new_services)[FLUX
         char cmd[(FLUX_MAX_PATH_LEN + 32) * 3];
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && cp -a \"%s\" \"%s\"", dst, src, dst);
         if (system(cmd) == 0) {
-            printf("[flux] updated service /etc/sv/%s\n", new_services[i]);
+            flux_step("updated service /etc/sv/%s", new_services[i]);
             // greetd's %post-install disables getty-tty1 (they fight over tty1); redo that here since this restore just undid it
             if (strcmp(new_services[i], "getty-tty1") == 0) {
                 struct stat greetd_st;
@@ -128,7 +128,7 @@ static void apply_manifest(const char *rootfs_dir, int *boot_pending) {
 
     FILE *mf = fopen(manifest_path, "r");
     if (!mf) {
-        fprintf(stderr, "flux: kira-update-manifest missing from release, nothing applied\n");
+        flux_err("kira-update-manifest missing from release, nothing applied");
         return;
     }
 
@@ -151,23 +151,23 @@ static void apply_manifest(const char *rootfs_dir, int *boot_pending) {
 
         struct stat st;
         if (stat(src, &st) != 0) {
-            fprintf(stderr, "flux: warning: %s missing from release, skipping\n", target);
+            flux_warn("%s missing from release, skipping", target);
             continue;
         }
 
         if (strcmp(category, "live") == 0) {
             if (atomic_replace(src, target) == FLUX_ERR_NONE)
-                printf("[flux] updated %s\n", target);
+                flux_step("updated %s", target);
         } else if (strncmp(category, "restart:", 8) == 0) {
             if (atomic_replace(src, target) == FLUX_ERR_NONE) {
-                printf("[flux] updated %s\n", target);
+                flux_step("updated %s", target);
                 char svc_cmd[256];
                 snprintf(svc_cmd, sizeof(svc_cmd), "sv restart /etc/sv/%s", category + 8);
                 system(svc_cmd);
             }
         } else if (strcmp(category, "boot") == 0) {
             if (atomic_replace(src, target) == FLUX_ERR_NONE) {
-                printf("[flux] staged %s (applies on next boot)\n", target);
+                flux_step("staged %s (applies on next boot)", target);
                 *boot_pending = 1;
             }
         } else if (strcmp(category, "service") == 0) {
@@ -200,10 +200,10 @@ static void apply_initramfs(const char *scratch, int *boot_pending) {
     snprintf(new_initramfs, sizeof(new_initramfs), "%s/initramfs.cpio.gz", scratch);
 
     if (atomic_replace(new_initramfs, initrd_path) == FLUX_ERR_NONE) {
-        printf("[flux] staged %s (applies on next boot)\n", initrd_path);
+        flux_step("staged %s (applies on next boot)", initrd_path);
         *boot_pending = 1;
     } else {
-        fprintf(stderr, "flux: warning: failed to stage new initramfs at %s\n", initrd_path);
+        flux_warn("failed to stage new initramfs at %s", initrd_path);
     }
 }
 
@@ -220,35 +220,35 @@ int flux_base_update(int argc, char **argv, const char *usage) {
 
     char current[64];
     if (read_current_version(current, sizeof(current)) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: /etc/kira-release not found, is this a Kira system?\n");
+        flux_err("/etc/kira-release not found, is this a Kira system?");
         return FLUX_ERR_NOT_FOUND;
     }
 
-    printf("[flux] checking for a newer kira-base release...\n");
+    flux_action("Checking for a newer kira-base release");
     char tag[64];
     int fetch_err = flux_fetch_latest_git_tag(KIRA_BASE_REPO_URL, tag, sizeof(tag));
     if (fetch_err == FLUX_ERR_NOT_FOUND) {
-        printf("[flux] no release tags found at %s\n", KIRA_BASE_REPO_URL);
+        flux_warn("no release tags found at %s", KIRA_BASE_REPO_URL);
         return FLUX_ERR_NOT_FOUND;
     }
     if (fetch_err != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: could not reach %s to check for updates\n", KIRA_BASE_REPO_URL);
+        flux_err("could not reach %s to check for updates", KIRA_BASE_REPO_URL);
         return FLUX_ERR_NETWORK;
     }
 
     const char *version = strip_v(tag);
     if (strcmp(version, current) == 0 && !force) {
-        printf("[flux] kira-base already up to date (%s)\n", current);
+        flux_ok("kira-base already up to date (%s)", current);
         return FLUX_ERR_NONE;
     }
 
-    printf("[flux] updating kira-base %s -> %s\n", current, version);
+    flux_action("Updating kira-base %s -> %s", current, version);
 
     flux_config_t config;
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
     if (strlen(config.binary_cache_url) == 0) {
-        fprintf(stderr, "flux: binary_cache_url not set in flux.conf\n");
+        flux_err("binary_cache_url not set in flux.conf");
         return FLUX_ERR_GENERAL;
     }
 
@@ -257,15 +257,15 @@ int flux_base_update(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\"", scratch, scratch);
     system(cmd);
 
-    printf("[flux] downloading rootfs.tar.gz...\n");
+    flux_step("downloading rootfs.tar.gz...");
     if (download_signed(config.binary_cache_url, version, "rootfs.tar.gz", scratch, config.flux_pub_path) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to fetch or verify rootfs.tar.gz\n");
+        flux_err("failed to fetch or verify rootfs.tar.gz");
         return FLUX_ERR_NETWORK;
     }
 
-    printf("[flux] downloading initramfs.cpio.gz...\n");
+    flux_step("downloading initramfs.cpio.gz...");
     if (download_signed(config.binary_cache_url, version, "initramfs.cpio.gz", scratch, config.flux_pub_path) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to fetch or verify initramfs.cpio.gz\n");
+        flux_err("failed to fetch or verify initramfs.cpio.gz");
         return FLUX_ERR_NETWORK;
     }
 
@@ -273,7 +273,7 @@ int flux_base_update(int argc, char **argv, const char *usage) {
     snprintf(rootfs_dir, sizeof(rootfs_dir), "%s/rootfs", scratch);
     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -xzf \"%s/rootfs.tar.gz\" -C \"%s\"", rootfs_dir, scratch, rootfs_dir);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to extract rootfs.tar.gz\n");
+        flux_err("failed to extract rootfs.tar.gz");
         return FLUX_ERR_GENERAL;
     }
 
@@ -290,9 +290,9 @@ int flux_base_update(int argc, char **argv, const char *usage) {
         fclose(rf);
     }
 
-    printf("[flux] kira-base updated to %s\n", version);
+    flux_ok("kira-base updated to %s", version);
     if (boot_pending)
-        printf("[flux] reboot required to apply the new init/runit binaries and initramfs\n");
+        flux_warn("reboot required to apply the new init/runit binaries and initramfs");
 
     return FLUX_ERR_NONE;
 }

@@ -18,27 +18,27 @@ int flux_remove(int argc, char **argv, const char *usage) {
     }
 
     const char *pkg = argv[0];
-    printf("[flux] removing: %s\n", pkg);
+    flux_action("Removing %s", pkg);
 
     if (!flux_db_is_installed(pkg)) {
-        fprintf(stderr, "flux: %s is not installed\n", pkg);
+        flux_err("%s is not installed", pkg);
         return FLUX_ERR_NOT_FOUND;
     }
 
     if (flux_db_remove(pkg) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to remove %s\n", pkg);
+        flux_err("failed to remove %s", pkg);
         return FLUX_ERR_GENERAL;
     }
 
-    printf("[flux] %s removed successfully\n", pkg);
+    flux_ok("%s removed successfully", pkg);
 
     if (autoremove) {
         int removed = 0;
         flux_autoremove_orphans(&removed);
         if (removed > 0)
-            printf("[flux] removed %d orphaned dependency package(s)\n", removed);
+            flux_ok("removed %d orphaned dependency package(s)", removed);
         else
-            printf("[flux] no orphaned dependencies to remove\n");
+            flux_step("no orphaned dependencies to remove");
     }
 
     return FLUX_ERR_NONE;

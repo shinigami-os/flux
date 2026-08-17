@@ -38,4 +38,20 @@ void flux_ok(const char *fmt, ...);
 void flux_warn(const char *fmt, ...);
 void flux_err(const char *fmt, ...);
 
+// UI toolkit: consistent styled output across every command, nala-style
+void flux_action(const char *fmt, ...);   // bold top-level header, e.g. "Installing nouveau-firmware 20260810"
+void flux_step(const char *fmt, ...);     // indented in-progress sub-step under an action
+int  flux_term_width(void);               // current terminal width, or 72 if not a tty
+void flux_rule(void);                     // a full-width horizontal divider
+
+typedef struct {
+    char col1[FLUX_MAX_NAME_LEN];
+    char col2[FLUX_MAX_VERSION_LEN * 2 + 8]; // wide enough for "old -> new" version pairs, not just a single version
+} flux_table_row_t;
+
+// prints a bordered two-column table (e.g. package name / version)
+void flux_print_table(const char *title, const flux_table_row_t *rows, int count);
+
+double flux_now_seconds(void);            // monotonic-ish wall clock for elapsed-time summaries
+
 #endif

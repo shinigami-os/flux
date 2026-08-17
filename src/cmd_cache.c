@@ -11,17 +11,17 @@ int flux_cache(int argc, char **argv, const char *usage) {
 
     if (strcmp(argv[0], "clean") == 0) {
         if (argc >= 2 && strcmp(argv[1], "--all") == 0) {
-            printf("[flux] cache clean --all: stub\n");
+            flux_warn("cache clean --all: not yet implemented");
             return FLUX_ERR_NONE;
         }
         if (argc >= 2 && strcmp(argv[1], "--unused") == 0) {
-            printf("[flux] cache clean --unused: stub\n");
+            flux_warn("cache clean --unused: not yet implemented");
             return FLUX_ERR_NONE;
         }
-        printf("[flux] cache clean: stub\n");
+        flux_warn("cache clean: not yet implemented");
         return FLUX_ERR_NONE;
     }
 
-    fprintf(stderr, "flux: unknown cache subcommand: %s\n", argv[0]);
+    flux_err("unknown cache subcommand: %s", argv[0]);
     return FLUX_ERR_USAGE;
 }

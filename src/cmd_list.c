@@ -22,7 +22,7 @@ int flux_list(int argc, char **argv, const char *usage) {
     char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
     int count = 0;
     if (flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &count) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to read package database\n");
+        flux_err("failed to read package database");
         return FLUX_ERR_GENERAL;
     }
 
@@ -34,15 +34,22 @@ int flux_list(int argc, char **argv, const char *usage) {
         if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
         if (!show_auto && info.auto_installed) continue;
 
-        printf("%-32s %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "");
+        if (!shown) {
+            if (flux_colors_enabled()) printf("\033[1m%-32s %-12s %s\033[0m\n", "PACKAGE", "VERSION", "");
+            else printf("%-32s %-12s %s\n", "PACKAGE", "VERSION", "");
+        }
+        if (flux_colors_enabled())
+            printf("\033[32m%-32s\033[0m %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "");
+        else
+            printf("%-32s %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "");
         shown++;
     }
 
     if (shown == 0) {
         if (!show_auto)
-            printf("[flux] no manually installed packages (run 'flux list -a' to see all)\n");
+            flux_warn("no manually installed packages (run 'flux list -a' to see all)");
         else
-            printf("[flux] no packages installed\n");
+            flux_warn("no packages installed");
     }
 
     return FLUX_ERR_NONE;

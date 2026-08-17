@@ -10,7 +10,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 - **Reproducible builds.** Same recipe + same source = identical output.
 - **Binary cache.** Skip compilation when a valid signed binary exists locally or on the remote cache server.
 - **Dependency-minimal.** Build deps are only pulled in for a package that actually needs to compile from source. A package with a cache hit, or a meta-package, never drags its build toolchain along.
-- **Transparent.** Every operation prints what it is doing and why.
+- **Transparent.** Every operation prints what it is doing and why, with a consistent styled output (bold action headers, indented step lines, bordered tables for install/update queues) that respects `NO_COLOR` and non-tty output automatically.
 - **Scriptable.** Exit codes are stable and documented. flux works in shell scripts and CI pipelines.
 - **No runtime deps.** flux links only against libc. Nothing else required.
 - **Cross-compile aware.** `flux build --cross` builds against a configured cross sysroot instead of the host.

@@ -32,28 +32,28 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         }
     }
 
-    printf("[flux] checking for a newer release...\n");
+    flux_action("Checking for a newer flux release");
     char tag[64];
     int fetch_err = flux_fetch_latest_git_tag(FLUX_REPO_URL, tag, sizeof(tag));
     if (fetch_err == FLUX_ERR_NOT_FOUND) {
-        printf("[flux] no release tags found at %s\n", FLUX_REPO_URL);
+        flux_warn("no release tags found at %s", FLUX_REPO_URL);
         return FLUX_ERR_NOT_FOUND;
     }
     if (fetch_err != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: could not reach %s to check for updates\n", FLUX_REPO_URL);
+        flux_err("could not reach %s to check for updates", FLUX_REPO_URL);
         return FLUX_ERR_NETWORK;
     }
 
     const char *version = strip_v(tag);
     if (strcmp(version, FLUX_VERSION) == 0 && !force) {
-        printf("[flux] already up to date (%s)\n", FLUX_VERSION);
+        flux_ok("already up to date (%s)", FLUX_VERSION);
         return FLUX_ERR_NONE;
     }
 
     if (system("command -v gcc >/dev/null 2>&1") != 0 ||
         system("command -v make >/dev/null 2>&1") != 0) {
-        fprintf(stderr, "flux: gcc/make not found, can't build flux from source\n");
-        fprintf(stderr, "hint: run 'flux install build-essential' first\n");
+        flux_err("gcc/make not found, can't build flux from source");
+        flux_err("hint: run 'flux install build-essential' first");
         return FLUX_ERR_BUILD;
     }
 
@@ -61,7 +61,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     {
         const char *test_src = "/tmp/flux_toolchain_test.c";
         FILE *tf = fopen(test_src, "w");
-        if (!tf) { fprintf(stderr, "flux: can't write to /tmp\n"); return FLUX_ERR_GENERAL; }
+        if (!tf) { flux_err("can't write to /tmp"); return FLUX_ERR_GENERAL; }
         fprintf(tf, "#include <stdio.h>\nint main(void){return 0;}\n");
         fclose(tf);
 
@@ -71,7 +71,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
             tc = system("gcc -I/usr/include /tmp/flux_toolchain_test.c -c -o /tmp/flux_toolchain_test.o >/dev/null 2>&1");
             if (tc == 0) {
                 need_explicit_includes = 1;
-                printf("[flux] note: gcc needs -I/usr/include (musl sysroot mismatch — will add to build)\n");
+                flux_warn("gcc needs -I/usr/include (musl sysroot mismatch, will add to build)");
             }
         }
 
@@ -81,17 +81,17 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         if (tc != 0) {
             struct stat hst;
             if (stat("/usr/include/stdio.h", &hst) != 0) {
-                fprintf(stderr, "flux: /usr/include/stdio.h not found\n");
-                fprintf(stderr, "hint: musl dev headers are missing — run 'flux base-update' or reinstall kira-base\n");
+                flux_err("/usr/include/stdio.h not found");
+                flux_err("hint: musl dev headers are missing, run 'flux base-update' or reinstall kira-base");
             } else {
-                fprintf(stderr, "flux: gcc cannot compile against /usr/include headers\n");
-                fprintf(stderr, "hint: try 'flux install -f gcc' to reinstall the compiler\n");
+                flux_err("gcc cannot compile against /usr/include headers");
+                flux_err("hint: try 'flux install -f gcc' to reinstall the compiler");
             }
             return FLUX_ERR_BUILD;
         }
     }
 
-    printf("[flux] updating flux %s -> %s\n", FLUX_VERSION, version);
+    flux_action("Updating flux %s -> %s", FLUX_VERSION, version);
 
     const char *scratch = "/tmp/flux-selfupdate";
     char cmd[1024];
@@ -102,17 +102,17 @@ int flux_self_update(int argc, char **argv, const char *usage) {
         "git clone --depth 1 --branch \"%s\" \"%s\" \"%s\"",
         tag, FLUX_REPO_URL, scratch);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to fetch flux source\n");
+        flux_err("failed to fetch flux source");
         return FLUX_ERR_NETWORK;
     }
 
-    printf("[flux] building...\n");
+    flux_step("building...");
     if (need_explicit_includes)
         snprintf(cmd, sizeof(cmd), "cd \"%s\" && make CFLAGS=\"-Wall -Wextra -pedantic -std=c11 -I/usr/include\"", scratch);
     else
         snprintf(cmd, sizeof(cmd), "cd \"%s\" && make", scratch);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: build failed\n");
+        flux_err("build failed");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
         system(cmd);
         return FLUX_ERR_BUILD;
@@ -122,7 +122,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     snprintf(new_bin, sizeof(new_bin), "%s/build/flux", scratch);
     struct stat st;
     if (stat(new_bin, &st) != 0) {
-        fprintf(stderr, "flux: build did not produce a binary\n");
+        flux_err("build did not produce a binary");
         return FLUX_ERR_BUILD;
     }
 
@@ -136,7 +136,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
 
     snprintf(cmd, sizeof(cmd), "cp \"%s\" \"%s\" && chmod 755 \"%s\"", new_bin, staged, staged);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to stage new binary (need root?)\n");
+        flux_err("failed to stage new binary (need root?)");
         return FLUX_ERR_PERMISSION;
     }
 
@@ -144,7 +144,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     system(cmd);
 
     if (rename(staged, current) != 0) {
-        fprintf(stderr, "flux: failed to install new binary\n");
+        flux_err("failed to install new binary");
         remove(staged);
         return FLUX_ERR_GENERAL;
     }
@@ -152,6 +152,6 @@ int flux_self_update(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
     system(cmd);
 
-    printf("[flux] updated to %s (previous binary kept at %s)\n", version, backup);
+    flux_ok("updated to %s (previous binary kept at %s)", version, backup);
     return FLUX_ERR_NONE;
 }

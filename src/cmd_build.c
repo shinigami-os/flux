@@ -25,8 +25,7 @@ int flux_build(int argc, char **argv, const char *usage) {
         }
     }
     const char *pkg = argv[pkg_idx];
-
-    printf("[flux] building: %s\n", pkg);
+    double t_start = flux_now_seconds();
 
     flux_config_t config;
     memset(&config, 0, sizeof(config));
@@ -34,15 +33,15 @@ int flux_build(int argc, char **argv, const char *usage) {
 
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
-        fprintf(stderr, "flux: recipe repo not found at %s\n", config.local_repo_path);
-        fprintf(stderr, "hint: run 'flux update' to download the recipe repo\n");
+        flux_err("recipe repo not found at %s", config.local_repo_path);
+        flux_err("hint: run 'flux update' to download the recipe repo");
         return FLUX_ERR_GENERAL;
     }
 
     char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config.local_repo_path, pkg);
     if (stat(koto_path, &st) != 0) {
-        fprintf(stderr, "flux: no recipe found for '%s'\n", pkg);
+        flux_err("no recipe found for '%s'", pkg);
         return FLUX_ERR_NOT_FOUND;
     }
 
@@ -50,15 +49,15 @@ int flux_build(int argc, char **argv, const char *usage) {
     memset(&recipe, 0, sizeof(recipe));
     if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return FLUX_ERR_KOTODAMA;
 
-    printf("[flux] %s version %s\n", recipe.name, recipe.version);
-
     int is_meta = (strlen(recipe.url) == 0);
 
     // nothing to do, checked before any cache lookup
     if (is_meta && strlen(recipe.hook_install) == 0) {
-        printf("[flux] %s is a meta-package, nothing to build\n", pkg);
+        flux_ok("%s is a meta-package, nothing to build", pkg);
         return FLUX_ERR_NONE;
     }
+
+    flux_action("Building %s %s%s", recipe.name, recipe.version, cross ? " (cross)" : "");
 
     char cache_key[256];
     memset(cache_key, 0, sizeof(cache_key));
@@ -74,13 +73,13 @@ int flux_build(int argc, char **argv, const char *usage) {
             cross_target = config.package_target;
         }
         if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cross_target, cache_key, sizeof(cache_key)) != FLUX_ERR_NONE) {
-            fprintf(stderr, "flux: failed to compute cache key\n");
+            flux_err("failed to compute cache key");
             return FLUX_ERR_GENERAL;
         }
 
         // flux build never pulls from the remote cache, only ever builds or uses a local hit
         if (flux_cache_lookup_local(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
-            printf("[flux] %s is already cached at %s\n", pkg, cache_path);
+            flux_ok("%s is already cached at %s", pkg, cache_path);
             return FLUX_ERR_NONE;
         }
     }
@@ -113,7 +112,7 @@ int flux_build(int argc, char **argv, const char *usage) {
             git_url[sizeof(git_url) - 1] = '\0';
         }
 
-        printf("[flux] cloning: %s\n", git_url);
+        flux_step("cloning: %s", git_url);
         if (strlen(git_branch) > 0) {
             snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && git clone --depth=1 --recurse-submodules --shallow-submodules --branch \"%s\" \"%s\" \"%s\"",
                      build_dir, git_branch, git_url, build_dir);
@@ -122,12 +121,12 @@ int flux_build(int argc, char **argv, const char *usage) {
                      build_dir, git_url, build_dir);
         }
         if (system(cmd) != 0) {
-            fprintf(stderr, "flux: failed to clone git repository\n");
+            flux_err("failed to clone git repository");
             return FLUX_ERR_NETWORK;
         }
 
         if (strlen(recipe.sha256) > 0) {
-            printf("[flux] verifying commit...\n");
+            flux_step("verifying commit...");
             char sha_cmd[640];
             snprintf(sha_cmd, sizeof(sha_cmd),
                      "git -C \"%s\" rev-parse HEAD | tr -d '\\n' > /tmp/flux_hash_actual", build_dir);
@@ -139,8 +138,7 @@ int flux_build(int argc, char **argv, const char *usage) {
             fclose(f);
             remove("/tmp/flux_hash_actual");
             if (strcmp(actual, recipe.sha256) != 0) {
-                fprintf(stderr, "flux: commit mismatch\nexpected: %s\ngot:      %s\n",
-                        recipe.sha256, actual);
+                flux_err("commit mismatch (expected %s, got %s)", recipe.sha256, actual);
                 return FLUX_ERR_GENERAL;
             }
         }
@@ -149,14 +147,14 @@ int flux_build(int argc, char **argv, const char *usage) {
         url_basename = url_basename ? url_basename + 1 : recipe.url;
         snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
-        printf("[flux] fetching source: %s\n", recipe.url);
+        flux_step("fetching source: %s", recipe.url);
         snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", tarball, recipe.url);
         if (system(cmd) != 0) {
-            fprintf(stderr, "flux: failed to fetch source\n");
+            flux_err("failed to fetch source");
             return FLUX_ERR_NETWORK;
         }
 
-        printf("[flux] verifying checksum...\n");
+        flux_step("verifying checksum...");
         char sha_cmd[640];
         snprintf(sha_cmd, sizeof(sha_cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", tarball);
         system(sha_cmd);
@@ -167,14 +165,13 @@ int flux_build(int argc, char **argv, const char *usage) {
         fclose(f);
         remove("/tmp/flux_hash_actual");
         if (strcmp(actual, recipe.sha256) != 0) {
-            fprintf(stderr, "flux: checksum mismatch\nexpected: %s\ngot:      %s\n",
-                    recipe.sha256, actual);
+            flux_err("checksum mismatch (expected %s, got %s)", recipe.sha256, actual);
             return FLUX_ERR_GENERAL;
         }
 
-        printf("[flux] extracting...\n");
+        flux_step("extracting...");
         if (flux_extract_source(tarball, build_dir) != 0) {
-            fprintf(stderr, "flux: failed to extract tarball\n");
+            flux_err("failed to extract tarball");
             return FLUX_ERR_GENERAL;
         }
     } else {
@@ -230,21 +227,21 @@ int flux_build(int argc, char **argv, const char *usage) {
             int _ret = system(_cmd); \
             remove(_script); \
             if (_ret != 0) { \
-                fprintf(stderr, "flux: %s failed\n", label); \
+                flux_err("%s failed", label); \
                 return FLUX_ERR_BUILD; \
             } \
         } \
     } while(0)
 
     if (!is_meta) {
-        printf("[flux] running pre-build...\n");
+        flux_step("running pre-build...");
         RUN_HOOK(recipe.hook_pre_build, "pre-build");
-        printf("[flux] building...\n");
+        flux_step("building...");
         RUN_HOOK(recipe.hook_build, "build");
-        printf("[flux] running post-build...\n");
+        flux_step("running post-build...");
         RUN_HOOK(recipe.hook_post_build, "post-build");
     }
-    printf("[flux] installing to destdir...\n");
+    flux_step("installing to destdir...");
     RUN_HOOK(recipe.hook_install, "install");
 
     if (!is_meta && cross && strlen(config.flux_cross_compile_sysroot) > 0) {
@@ -256,14 +253,14 @@ int flux_build(int argc, char **argv, const char *usage) {
             " 2>/dev/null || true",
             destdir, config.flux_cross_compile_sysroot);
         system(destdir_la_patch);
-        printf("[flux] stripped cross-sysroot paths from destdir .la files\n");
+        flux_step("stripped cross-sysroot paths from destdir .la files");
     }
 
     if (!is_meta && cross && !recipe.no_sysroot_stage && strlen(config.flux_cross_compile_sysroot) > 0) {
         char sysroot_cmd[FLUX_MAX_PATH_LEN * 2 + 32];
         snprintf(sysroot_cmd, sizeof(sysroot_cmd), "cp -a \"%s\"/. \"%s\"/", destdir, config.flux_cross_compile_sysroot);
         system(sysroot_cmd);
-        printf("[flux] installed cross build artifacts to sysroot\n");
+        flux_step("installed cross build artifacts to sysroot");
 
         char la_patch[FLUX_MAX_PATH_LEN * 4 + 128];
         snprintf(la_patch, sizeof(la_patch),
@@ -275,16 +272,16 @@ int flux_build(int argc, char **argv, const char *usage) {
             config.flux_cross_compile_sysroot,
             config.flux_cross_compile_sysroot);
         system(la_patch);
-        printf("[flux] patched .la files in sysroot\n");
+        flux_step("patched .la files in sysroot");
     }
 
     #undef RUN_HOOK
 
     // store in cache (meta-packages never reach here)
     if (!is_meta) {
-        printf("[flux] caching...\n");
+        flux_step("caching...");
         if (flux_cache_store(cache_key, destdir, config.flux_secret_key_path) != FLUX_ERR_NONE) {
-            fprintf(stderr, "flux: failed to store in cache\n");
+            flux_err("failed to store in cache");
             return FLUX_ERR_CACHE;
         }
     }
@@ -297,6 +294,6 @@ int flux_build(int argc, char **argv, const char *usage) {
     }
     system(cleanup);
 
-    printf("[flux] %s built and cached at /var/cache/flux/%s.tar.zst\n", pkg, cache_key);
+    flux_ok("%s built and cached at /var/cache/flux/%s.tar.zst in %.1fs", pkg, cache_key, flux_now_seconds() - t_start);
     return FLUX_ERR_NONE;
 }

@@ -1,14 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "../include/flux.h"
+#include "../include/util.h"
 
-#define ANSI_BOLD    "\033[1m"
-#define ANSI_RESET   "\033[0m"
-#define ANSI_CYAN    "\033[36m"
-#define ANSI_YELLOW  "\033[33m"
-#define ANSI_GREEN   "\033[32m"
-#define ANSI_MAGENTA "\033[35m"
-#define ANSI_DIM     "\033[2m"
 
 int flux_install(int argc, char **argv, const char *usage);
 int flux_search(int argc, char **argv, const char *usage);
@@ -44,22 +38,27 @@ flux_cmd_t commands[] = {
 };
 
 void flux_usage() {
+    int c = flux_colors_enabled();
+    const char *bold = c ? "\033[1m" : "", *reset = c ? "\033[0m" : "";
+    const char *cyan = c ? "\033[36m" : "", *yellow = c ? "\033[33m" : "";
+    const char *green = c ? "\033[32m" : "", *magenta = c ? "\033[35m" : "", *dim = c ? "\033[2m" : "";
+
     printf("\n");
-    printf(ANSI_BOLD ANSI_MAGENTA "flux" ANSI_RESET " - the " ANSI_BOLD "Kira Linux" ANSI_RESET " package manager\n");
-    printf(ANSI_DIM "by OxoGhost\n" ANSI_RESET);
+    printf("%s%sflux%s - the %sKira Linux%s package manager\n", bold, magenta, reset, bold, reset);
+    printf("%sby OxoGhost%s\n", dim, reset);
     printf("\n");
 
-    printf(ANSI_BOLD ANSI_YELLOW "USAGE\n" ANSI_RESET);
-    printf("  flux " ANSI_CYAN "<command>" ANSI_RESET " [arguments]\n");
+    printf("%s%sUSAGE%s\n", bold, yellow, reset);
+    printf("  flux %s<command>%s [arguments]\n", cyan, reset);
     printf("\n");
 
-    printf(ANSI_BOLD ANSI_YELLOW "COMMANDS\n" ANSI_RESET);
+    printf("%s%sCOMMANDS%s\n", bold, yellow, reset);
     for (int i = 0; commands[i].handler != NULL; i++) {
-        printf("  " ANSI_CYAN "%-30s" ANSI_RESET ANSI_GREEN "%s\n" ANSI_RESET, commands[i].usage, commands[i].desc);
+        printf("  %s%-30s%s%s%s%s\n", cyan, commands[i].usage, reset, green, commands[i].desc, reset);
     }
     printf("\n");
 
-    printf(ANSI_DIM "Run 'flux help <command>' for more information on a command.\n" ANSI_RESET);
+    printf("%sRun 'flux help <command>' for more information on a command.%s\n", dim, reset);
     printf("\n");
 }
 
@@ -76,6 +75,6 @@ int main(int argc, char **argv) {
             return commands[i].handler(argc - 2, argv + 2, commands[i].usage);
         }
     }
-    printf("flux: unknown command: %s\n", command);
+    flux_err("unknown command: %s", command);
     return FLUX_ERR_USAGE;
 }

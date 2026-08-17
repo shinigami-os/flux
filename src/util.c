@@ -7,6 +7,7 @@
 #include "../include/parser.h"
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <errno.h>
 #include <dirent.h>
@@ -36,7 +37,7 @@ void trim_right(char *s) {
 int flux_load_config(flux_config_t *config) {
     FILE *f = fopen("/etc/flux/flux.conf", "r");
     if (!f) {
-        fprintf(stderr, "flux: cannot open /etc/flux/flux.conf\n");
+        flux_err("cannot open /etc/flux/flux.conf");
         return FLUX_ERR_GENERAL;
     }
 
@@ -83,7 +84,7 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     mkdir("/var/lib/flux", 0755);
     mkdir("/var/lib/flux/installed", 0755);
     if (mkdir(dir, 0755) != 0 && errno != EEXIST) {
-        fprintf(stderr, "flux: failed to create package db entry for %s\n", info->name);
+        flux_err("failed to create package db entry for %s", info->name);
         return FLUX_ERR_GENERAL;
     }
 
@@ -250,7 +251,7 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     snprintf(check_cmd, sizeof(check_cmd), "curl -s -o /dev/null -f --head \"%s\"", remote_url);
     if (system(check_cmd) != 0) return FLUX_ERR_NOT_FOUND;
 
-    printf("[flux] remote cache hit, downloading...\n");
+    flux_step("remote cache hit, downloading...");
     system("mkdir -p /var/cache/flux");
 
     char dl_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
@@ -282,19 +283,19 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | zstd -o \"%s\"", destdir, archive);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to create cache archive\n");
+        flux_err("failed to create cache archive");
         return FLUX_ERR_CACHE;
     }
 
     // no signing key on this machine: leave the raw archive for manual transfer/signing elsewhere
     if (access(secret_key_path, R_OK) != 0) {
-        printf("[flux] cached locally (unsigned, no signing key on this machine): %s\n", archive);
+        flux_ok("cached locally (unsigned, no signing key on this machine): %s", archive);
         return FLUX_ERR_NONE;
     }
 
     snprintf(cmd, sizeof(cmd), "minisign -Sm \"%s\" -s \"%s\" -W", archive, secret_key_path);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to sign cache archive\n");
+        flux_err("failed to sign cache archive");
         return FLUX_ERR_CACHE;
     }
 
@@ -306,7 +307,7 @@ int flux_cache_store(const char *key, const char *destdir, const char *secret_ke
         system(chown_cmd);
     }
 
-    printf("[flux] cached: %s\n", archive);
+    flux_ok("cached: %s", archive);
     return FLUX_ERR_NONE;
 }
 
@@ -314,7 +315,7 @@ int flux_cache_verify(const char *path, const char *pub_path) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "minisign -Vm \"%s\" -p \"%s\"", path, pub_path);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: cache signature verification failed\n");
+        flux_err("cache signature verification failed");
         return FLUX_ERR_CACHE;
     }
     return FLUX_ERR_NONE;
@@ -422,7 +423,7 @@ int flux_autoremove_orphans(int *removed_count) {
             }
             if (needed) continue;
 
-            printf("[flux] removing orphaned dependency: %s\n", names[i]);
+            flux_step("removing orphaned dependency: %s", names[i]);
             flux_db_remove(names[i]);
             (*removed_count)++;
             removed_this_pass++;
@@ -467,36 +468,98 @@ int flux_colors_enabled(void) {
     return enabled;
 }
 
-static void flux_vlog(FILE *stream, const char *color, const char *fmt, va_list ap) {
-    if (flux_colors_enabled()) fprintf(stream, "%s", color);
+// glyph-prefixed, color-wrapped line with a trailing newline already included
+static void flux_vglyph(FILE *stream, const char *color, const char *glyph, const char *fmt, va_list ap) {
+    if (flux_colors_enabled()) fprintf(stream, "%s%s ", color, glyph);
+    else fprintf(stream, "%s ", glyph);
     vfprintf(stream, fmt, ap);
     if (flux_colors_enabled()) fprintf(stream, "\033[0m");
+    fputc('\n', stream);
 }
 
 void flux_log(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    flux_vlog(stdout, "\033[36m", fmt, ap);
+    flux_vglyph(stdout, "\033[36m", "\xe2\x86\x92", fmt, ap); // → cyan
     va_end(ap);
 }
 
 void flux_ok(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    flux_vlog(stdout, "\033[32m", fmt, ap);
+    flux_vglyph(stdout, "\033[32m", "\xe2\x9c\x93", fmt, ap); // ✓ green
     va_end(ap);
 }
 
 void flux_warn(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    flux_vlog(stdout, "\033[33m", fmt, ap);
+    flux_vglyph(stdout, "\033[33m", "!", fmt, ap); // yellow
     va_end(ap);
 }
 
 void flux_err(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    flux_vlog(stderr, "\033[31m", fmt, ap);
+    flux_vglyph(stderr, "\033[31m", "\xe2\x9c\x97", fmt, ap); // ✗ red
     va_end(ap);
+}
+
+void flux_action(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    if (flux_colors_enabled()) printf("\033[1;35m");
+    vprintf(fmt, ap);
+    if (flux_colors_enabled()) printf("\033[0m");
+    printf("\n");
+    va_end(ap);
+}
+
+void flux_step(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    if (flux_colors_enabled()) printf("  \033[36m\xe2\x80\xa2\033[0m "); // • dim cyan bullet
+    else printf("  * ");
+    vprintf(fmt, ap);
+    printf("\n");
+    va_end(ap);
+}
+
+int flux_term_width(void) {
+    struct winsize w;
+    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_col > 0)
+        return w.ws_col;
+    return 72;
+}
+
+void flux_rule(void) {
+    int width = flux_term_width();
+    if (flux_colors_enabled()) printf("\033[2m");
+    for (int i = 0; i < width; i++) fputs("\xe2\x94\x80", stdout); // ─
+    if (flux_colors_enabled()) printf("\033[0m");
+    printf("\n");
+}
+
+void flux_print_table(const char *title, const flux_table_row_t *rows, int count) {
+    size_t w1 = 0, w2 = 0;
+    for (int i = 0; i < count; i++) {
+        size_t l1 = strlen(rows[i].col1), l2 = strlen(rows[i].col2);
+        if (l1 > w1) w1 = l1;
+        if (l2 > w2) w2 = l2;
+    }
+    if (title) {
+        if (flux_colors_enabled()) printf("\033[1m");
+        printf("%s\n", title);
+        if (flux_colors_enabled()) printf("\033[0m");
+    }
+    flux_rule();
+    for (int i = 0; i < count; i++)
+        printf("  %-*s  %-*s\n", (int)w1, rows[i].col1, (int)w2, rows[i].col2);
+    flux_rule();
+}
+
+double flux_now_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }

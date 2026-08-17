@@ -90,7 +90,7 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
 
     char current[128];
     if (read_current_kernel(current, sizeof(current)) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to read current kernel version\n");
+        flux_err("failed to read current kernel version");
         return FLUX_ERR_GENERAL;
     }
 
@@ -98,19 +98,19 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
     if (strlen(config.binary_cache_url) == 0) {
-        fprintf(stderr, "flux: binary_cache_url not set in flux.conf\n");
+        flux_err("binary_cache_url not set in flux.conf");
         return FLUX_ERR_GENERAL;
     }
 
-    printf("[flux] checking for a newer kernel...\n");
+    flux_action("Checking for a newer kernel");
     char latest[128];
     if (flux_fetch_latest_kernel_version(config.binary_cache_url, latest, sizeof(latest)) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: could not fetch latest kernel version from cache\n");
+        flux_err("could not fetch latest kernel version from cache");
         return FLUX_ERR_NETWORK;
     }
 
     if (strcmp(current, latest) == 0 && !force) {
-        printf("[flux] kernel already up to date (%s)\n", current);
+        flux_ok("kernel already up to date (%s)", current);
         return FLUX_ERR_NONE;
     }
 
@@ -118,7 +118,7 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
     parse_kernel_version(current, cur_linux, sizeof(cur_linux), cur_shina, sizeof(cur_shina));
     parse_kernel_version(latest,  new_linux, sizeof(new_linux), new_shina, sizeof(new_shina));
 
-    printf("[flux] updating kernel:\n");
+    flux_action("Updating kernel");
     if (strcmp(cur_linux, new_linux) != 0)
         printf("  linux:     %s -> %s\n", cur_linux, new_linux);
     if (strcmp(cur_shina, new_shina) != 0)
@@ -129,50 +129,50 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\"", scratch, scratch);
     system(cmd);
 
-    printf("[flux] downloading kira-kernel-%s.tar.gz...\n", latest);
+    flux_step("downloading kira-kernel-%s.tar.gz...", latest);
     if (download_signed_kernel(config.binary_cache_url, latest, scratch, config.flux_pub_path) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to fetch or verify kernel archive\n");
+        flux_err("failed to fetch or verify kernel archive");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
         system(cmd);
         return FLUX_ERR_NETWORK;
     }
 
-    printf("[flux] installing kernel %s...\n", latest);
+    flux_step("installing kernel %s...", latest);
     char archive[FLUX_MAX_PATH_LEN];
     snprintf(archive, sizeof(archive), "%s/kira-kernel-%s.tar.gz", scratch, latest);
     snprintf(cmd, sizeof(cmd), "tar -xzf \"%s\" -C /", archive);
     if (system(cmd) != 0) {
-        fprintf(stderr, "flux: failed to extract kernel archive\n");
+        flux_err("failed to extract kernel archive");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
         system(cmd);
         return FLUX_ERR_GENERAL;
     }
 
-    printf("[flux] running depmod...\n");
+    flux_step("running depmod...");
     snprintf(cmd, sizeof(cmd), "depmod -a \"%s\"", latest);
     if (system(cmd) != 0)
-        printf("[flux] warning: depmod failed — modprobe may not find all modules\n");
+        flux_warn("depmod failed, modprobe may not find all modules");
 
     struct stat old_mod_st;
     char old_modules_path[256];
     snprintf(old_modules_path, sizeof(old_modules_path), "/lib/modules/%s", current);
     if (strcmp(current, latest) != 0 && stat(old_modules_path, &old_mod_st) == 0)
-        printf("[flux] old modules kept at %s (for rollback)\n", old_modules_path);
+        flux_step("old modules kept at %s (for rollback)", old_modules_path);
 
     if (system("command -v grub-mkconfig >/dev/null 2>&1") == 0) {
-        printf("[flux] updating grub...\n");
+        flux_step("updating grub...");
         system("grub-mkconfig -o /boot/grub/grub.cfg");
     } else if (system("command -v update-grub >/dev/null 2>&1") == 0) {
-        printf("[flux] updating grub...\n");
+        flux_step("updating grub...");
         system("update-grub");
     } else {
-        printf("[flux] note: grub not found, update your bootloader manually\n");
+        flux_warn("grub not found, update your bootloader manually");
     }
 
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", scratch);
     system(cmd);
 
-    printf("[flux] kernel updated to %s\n", latest);
-    printf("[flux] reboot required to boot the new kernel\n");
+    flux_ok("kernel updated to %s", latest);
+    flux_warn("reboot required to boot the new kernel");
     return FLUX_ERR_NONE;
 }

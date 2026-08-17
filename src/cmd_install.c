@@ -40,7 +40,7 @@ static int try_flatpak_fallback(const char *pkg) {
     int chosen = 0;
 
     if (n == 1) {
-        printf("\n[flux] no flux recipe found for '%s', but found on Flathub: %s\n", pkg, matches[0]);
+        flux_warn("no flux recipe found for '%s', but found on Flathub: %s", pkg, matches[0]);
         printf("Install via Flatpak? [y/N] ");
         fflush(stdout);
         if (!g_yes) {
@@ -54,7 +54,7 @@ static int try_flatpak_fallback(const char *pkg) {
         }
     } else {
         // always ask which one explicitly, even with -y/--yes, since that flag skips a yes/no confirmation, not a pick among several packages
-        printf("\n[flux] no flux recipe found for '%s', but found %d matches on Flathub:\n", pkg, n);
+        flux_warn("no flux recipe found for '%s', but found %d matches on Flathub:", pkg, n);
         for (int i = 0; i < n; i++)
             printf("  %d. %s\n", i + 1, matches[i]);
         printf("Install which one? [1-%d, or n to abort] ", n);
@@ -73,7 +73,7 @@ static int try_flatpak_fallback(const char *pkg) {
         char *endptr;
         long pick = strtol(answer, &endptr, 10);
         if (endptr == answer || pick < 1 || pick > n) {
-            fprintf(stderr, "flux: invalid choice\n");
+            flux_err("invalid choice");
             return FLUX_ERR_NONE;
         }
         chosen = (int)(pick - 1);
@@ -82,7 +82,7 @@ static int try_flatpak_fallback(const char *pkg) {
     char install_cmd[300];
     snprintf(install_cmd, sizeof(install_cmd), "flatpak install -y flathub \"%s\"", matches[chosen]);
     if (system(install_cmd) != 0) {
-        fprintf(stderr, "flux: flatpak install failed\n");
+        flux_err("flatpak install failed");
         return FLUX_ERR_GENERAL;
     }
     return FLUX_ERR_NONE;
@@ -96,7 +96,7 @@ static int fetch_source(const char *url, const char *dest) {
 
 static int verify_sha256(const char *path, const char *expected) {
     if (strcmp(expected, "SKIP") == 0 || strlen(expected) == 0) {
-        fprintf(stderr, "flux: warning: sha256 check skipped\n");
+        flux_warn("sha256 check skipped");
         return 0;
     }
 
@@ -113,7 +113,7 @@ static int verify_sha256(const char *path, const char *expected) {
     remove("/tmp/flux_hash_actual");
 
     if (strcmp(actual, expected) != 0) {
-        fprintf(stderr, "flux: checksum mismatch\nexpected: %s\ngot:      %s\n", expected, actual);
+        flux_err("checksum mismatch (expected %s, got %s)", expected, actual);
         return 1;
     }
     return 0;
@@ -127,7 +127,7 @@ static int extract_tarball(const char *tarball, const char *dest) {
 static int run_post_install_hook(const char *hook, const char *recipe_dir) {
     if (strlen(hook) == 0) return 0;
 
-    printf("[flux] running post-install...\n");
+    flux_step("running post-install...");
     system("mkdir -p /tmp/flux-build");
     const char *script_path = "/tmp/flux-build/.flux_post_install.sh";
     FILE *f = fopen(script_path, "w");
@@ -182,7 +182,7 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
     flux_recipe_t recipe;
     memset(&recipe, 0, sizeof(recipe));
     if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: no recipe found for dependency '%s'\n", pkg);
+        flux_err("no recipe found for dependency '%s'", pkg);
         return FLUX_ERR_DEPENDENCY;
     }
 
@@ -298,7 +298,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
 
     const char *pkg = argv[0];
-    printf("[flux] installing: %s\n", pkg);
+    double t_start = flux_now_seconds();
 
     // load config
     flux_config_t config;
@@ -308,8 +308,8 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
-        fprintf(stderr, "flux: recipe repo not found at %s\n", config.local_repo_path);
-        fprintf(stderr, "hint: run 'flux update' to download the recipe repo\n");
+        flux_err("recipe repo not found at %s", config.local_repo_path);
+        flux_err("hint: run 'flux update' to download the recipe repo");
         return FLUX_ERR_GENERAL;
     }
 
@@ -319,7 +319,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     if (stat(koto_path, &st) != 0) {
         int fp_err = try_flatpak_fallback(pkg);
         if (fp_err != FLUX_ERR_NOT_FOUND) return fp_err;
-        fprintf(stderr, "flux: no recipe found for '%s'\n", pkg);
+        flux_err("no recipe found for '%s'", pkg);
         return FLUX_ERR_NOT_FOUND;
     }
 
@@ -328,7 +328,10 @@ int flux_install(int argc, char **argv, const char *usage) {
     err = parse_kotodama(&recipe, koto_path);
     if (err != FLUX_ERR_NONE) return err;
 
-    printf("[flux] %s version %s\n", recipe.name, recipe.version);
+    if (!g_auto_installed)
+        flux_action("Installing %s %s", recipe.name, recipe.version);
+    else
+        flux_step("installing dependency: %s %s", recipe.name, recipe.version);
 
     char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
@@ -341,7 +344,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     // meta-packages are never marked installed; they're always re-walked so their deps and hooks can pick up changes
     if (has_source && flux_db_is_installed(pkg) && !g_force) {
         if (!g_auto_installed) flux_db_set_auto_installed(pkg, 0);
-        printf("[flux] %s is already installed\n", pkg);
+        flux_ok("%s is already installed", pkg);
         return FLUX_ERR_NONE;
     }
 
@@ -363,7 +366,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
         if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
-                printf("[flux] cache hit: %s\n", cache_path);
+                flux_step("cache hit: %s", cache_path);
                 if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
                     char cmd[1024];
                     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && zstd -d \"%s\" -o /tmp/flux_cache_extract.tar && tar -C \"%s\" -xf /tmp/flux_cache_extract.tar && rm /tmp/flux_cache_extract.tar", destdir, cache_path, destdir);
@@ -371,12 +374,12 @@ int flux_install(int argc, char **argv, const char *usage) {
                         cache_hit = 1;
                 }
                 if (!cache_hit)
-                    printf("[flux] cache verification failed, falling back to source\n");
+                    flux_warn("cache verification failed, falling back to source");
             } else {
-                printf("[flux] cache miss, building from source\n");
+                flux_step("cache miss, building from source");
             }
         } else {
-            printf("[flux] cache key generation failed, building from source\n");
+            flux_warn("cache key generation failed, building from source");
         }
     }
 
@@ -391,17 +394,22 @@ int flux_install(int argc, char **argv, const char *usage) {
         if (err2 != FLUX_ERR_NONE) return err2;
 
         if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
-            printf("\nThe following packages will be installed:\n  ");
+            flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
             for (int i = 0; i < queue.count; i++) {
                 char kp[FLUX_MAX_PATH_LEN * 2 + 16];
                 snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i]);
                 flux_recipe_t r;
                 memset(&r, 0, sizeof(r));
                 parse_kotodama(&r, kp);
-                printf("%s -v%s", queue.pkgs[i], r.version);
-                if (i < queue.count - 1) printf("  ");
+                strncpy(rows[i].col1, queue.pkgs[i], FLUX_MAX_NAME_LEN - 1);
+                strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
             }
-            printf("\n\nProceed? [Y/n] ");
+            char title[64];
+            snprintf(title, sizeof(title), "%d package%s will be installed",
+                     queue.count, queue.count == 1 ? "" : "s");
+            printf("\n");
+            flux_print_table(title, rows, queue.count);
+            printf("\nProceed? [Y/n] ");
             fflush(stdout);
             if (g_yes) {
                 printf("Y\n");
@@ -424,7 +432,7 @@ int flux_install(int argc, char **argv, const char *usage) {
             char *dep_argv[] = { queue.pkgs[i] };
             int dep_err = flux_install(1, dep_argv, "flux install <pkg>");
             if (dep_err != FLUX_ERR_NONE) {
-                fprintf(stderr, "flux: failed to install dependency '%s'\n", queue.pkgs[i]);
+                flux_err("failed to install dependency '%s'", queue.pkgs[i]);
                 g_auto_installed = 0;
                 g_force = saved_force;
                 return FLUX_ERR_DEPENDENCY;
@@ -435,8 +443,9 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
 
     if (cache_hit) {
+        flux_step("installing to system...");
         if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
-            fprintf(stderr, "flux: failed to copy cached files to system\n");
+            flux_err("failed to copy cached files to system");
             return FLUX_ERR_GENERAL;
         }
 
@@ -460,17 +469,17 @@ int flux_install(int argc, char **argv, const char *usage) {
         system(cleanup);
 
         if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
-            fprintf(stderr, "flux: post-install failed\n");
+            flux_err("post-install failed");
             return FLUX_ERR_BUILD;
         }
 
-        printf("[flux] %s installed successfully (from cache)\n", pkg);
+        flux_ok("%s installed successfully (from cache) in %.1fs", pkg, flux_now_seconds() - t_start);
         return FLUX_ERR_NONE;
     }
 
     if (pure_meta) {
         if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
-            fprintf(stderr, "flux: post-install failed\n");
+            flux_err("post-install failed");
             return FLUX_ERR_BUILD;
         }
 
@@ -483,7 +492,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t_m);
         info.auto_installed = g_auto_installed;
         flux_db_register(&info, NULL, 0);
-        printf("[flux] %s installed successfully (meta-package)\n", pkg);
+        flux_ok("%s installed successfully (meta-package)", pkg);
         return FLUX_ERR_NONE;
     }
 
@@ -518,7 +527,7 @@ int flux_install(int argc, char **argv, const char *usage) {
             git_url[sizeof(git_url) - 1] = '\0';
         }
 
-        printf("[flux] cloning: %s\n", git_url);
+        flux_step("cloning: %s", git_url);
         char clone_cmd[2048];
         if (strlen(git_branch) > 0) {
             snprintf(clone_cmd, sizeof(clone_cmd),
@@ -530,12 +539,12 @@ int flux_install(int argc, char **argv, const char *usage) {
                      build_dir, git_url, build_dir);
         }
         if (system(clone_cmd) != 0) {
-            fprintf(stderr, "flux: failed to clone git repository\n");
+            flux_err("failed to clone git repository");
             return FLUX_ERR_NETWORK;
         }
 
         if (strlen(recipe.sha256) > 0) {
-            printf("[flux] verifying commit...\n");
+            flux_step("verifying commit...");
             char sha_cmd[640];
             snprintf(sha_cmd, sizeof(sha_cmd),
                      "git -C \"%s\" rev-parse HEAD | tr -d '\\n' > /tmp/flux_hash_actual", build_dir);
@@ -547,8 +556,7 @@ int flux_install(int argc, char **argv, const char *usage) {
             fclose(hf);
             remove("/tmp/flux_hash_actual");
             if (strcmp(actual, recipe.sha256) != 0) {
-                fprintf(stderr, "flux: commit mismatch\nexpected: %s\ngot:      %s\n",
-                        recipe.sha256, actual);
+                flux_err("commit mismatch (expected %s, got %s)", recipe.sha256, actual);
                 return FLUX_ERR_GENERAL;
             }
         }
@@ -557,21 +565,21 @@ int flux_install(int argc, char **argv, const char *usage) {
         url_basename = url_basename ? url_basename + 1 : recipe.url;
         snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
-        printf("[flux] fetching source: %s\n", recipe.url);
+        flux_step("fetching source: %s", recipe.url);
         if (fetch_source(recipe.url, tarball) != 0) {
-            fprintf(stderr, "flux: failed to fetch source\n");
+            flux_err("failed to fetch source");
             return FLUX_ERR_NETWORK;
         }
 
-        printf("[flux] verifying checksum...\n");
+        flux_step("verifying checksum...");
         if (verify_sha256(tarball, recipe.sha256) != 0) {
-            fprintf(stderr, "flux: checksum verification failed\n");
+            flux_err("checksum verification failed");
             return FLUX_ERR_GENERAL;
         }
 
-        printf("[flux] extracting...\n");
+        flux_step("extracting...");
         if (extract_tarball(tarball, build_dir) != 0) {
-            fprintf(stderr, "flux: failed to extract tarball\n");
+            flux_err("failed to extract tarball");
             return FLUX_ERR_GENERAL;
         }
     } else {
@@ -582,32 +590,33 @@ int flux_install(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", destdir);
     system(cmd);
 
-    printf("[flux] running pre-build...\n");
+    flux_step("running pre-build...");
     if (run_hook(recipe.hook_pre_build, build_dir, destdir, recipe_dir) != 0) {
-        fprintf(stderr, "flux: pre-build failed\n");
+        flux_err("pre-build failed");
         return FLUX_ERR_BUILD;
     }
 
-    printf("[flux] building...\n");
+    flux_step("building...");
     if (run_hook(recipe.hook_build, build_dir, destdir, recipe_dir) != 0) {
-        fprintf(stderr, "flux: build failed\n");
+        flux_err("build failed");
         return FLUX_ERR_BUILD;
     }
 
-    printf("[flux] running post-build...\n");
+    flux_step("running post-build...");
     if (run_hook(recipe.hook_post_build, build_dir, destdir, recipe_dir) != 0) {
-        fprintf(stderr, "flux: post-build failed\n");
+        flux_err("post-build failed");
         return FLUX_ERR_BUILD;
     }
 
-    printf("[flux] installing files...\n");
+    flux_step("installing files...");
     if (run_hook(recipe.hook_install, build_dir, destdir, recipe_dir) != 0) {
-        fprintf(stderr, "flux: install hook failed\n");
+        flux_err("install hook failed");
         return FLUX_ERR_BUILD;
     }
 
+    flux_step("installing to system...");
     if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: failed to copy files to system\n");
+        flux_err("failed to copy files to system");
         return FLUX_ERR_GENERAL;
     }
 
@@ -635,10 +644,10 @@ int flux_install(int argc, char **argv, const char *usage) {
     system(cleanup_cmd);
 
     if (run_post_install_hook(recipe.hook_post_install, recipe_dir) != 0) {
-        fprintf(stderr, "flux: post-install failed\n");
+        flux_err("post-install failed");
         return FLUX_ERR_BUILD;
     }
 
-    printf("[flux] %s installed successfully\n", pkg);
+    flux_ok("%s installed successfully in %.1fs", pkg, flux_now_seconds() - t_start);
     return FLUX_ERR_NONE;
 }

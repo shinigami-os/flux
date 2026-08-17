@@ -24,19 +24,23 @@ int flux_info(int argc, char **argv, const char *usage) {
     int has_recipe = (parse_kotodama(&recipe, koto_path) == FLUX_ERR_NONE);
 
     if (!has_recipe && !flux_db_is_installed(pkg)) {
-        fprintf(stderr, "flux: no package '%s' found\n", pkg);
+        flux_err("no package '%s' found", pkg);
         return FLUX_ERR_NOT_FOUND;
     }
 
     int installed = flux_db_is_installed(pkg);
+    int c = flux_colors_enabled();
 
     printf("\n");
-    printf("  %-16s %s\n",   "name:",        has_recipe ? recipe.name        : pkg);
+    if (c) printf("\033[1;35m%s\033[0m\n", has_recipe ? recipe.name : pkg);
+    else printf("%s\n", has_recipe ? recipe.name : pkg);
+    flux_rule();
     printf("  %-16s %s\n",   "version:",     has_recipe ? recipe.version     : "unknown");
     printf("  %-16s %s\n",   "description:", has_recipe ? recipe.description : "unknown");
     printf("  %-16s %s\n",   "license:",     has_recipe ? recipe.license     : "unknown");
     printf("  %-16s %dMB\n", "size:",        has_recipe ? recipe.size        : 0);
-    printf("  %-16s %s\n",   "status:",      installed  ? "installed"        : "not installed");
+    if (c) printf("  %-16s \033[%sm%s\033[0m\n", "status:", installed ? "32" : "33", installed ? "installed" : "not installed");
+    else printf("  %-16s %s\n", "status:", installed ? "installed" : "not installed");
 
     if (installed) {
         flux_pkg_info_t db_info;

@@ -7,18 +7,18 @@ int flux_autoremove(int argc, char **argv, const char *usage) {
     (void)argv;
     (void)usage;
 
-    printf("[flux] scanning for orphaned dependencies...\n");
+    flux_action("Scanning for orphaned dependencies");
 
     int removed = 0;
     if (flux_autoremove_orphans(&removed) != FLUX_ERR_NONE) {
-        fprintf(stderr, "flux: autoremove failed\n");
+        flux_err("autoremove failed");
         return FLUX_ERR_GENERAL;
     }
 
     if (removed > 0)
-        printf("[flux] removed %d orphaned dependency package(s)\n", removed);
+        flux_ok("removed %d orphaned dependency package(s)", removed);
     else
-        printf("[flux] nothing to remove\n");
+        flux_ok("nothing to remove");
 
     return FLUX_ERR_NONE;
 }

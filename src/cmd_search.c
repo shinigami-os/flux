@@ -19,7 +19,7 @@ int flux_search(int argc, char **argv, const char *usage) {
 
     DIR *dir = opendir(config.local_repo_path);
     if (!dir) {
-        fprintf(stderr, "flux: cannot open recipe repo at %s\n", config.local_repo_path);
+        flux_err("cannot open recipe repo at %s", config.local_repo_path);
         return FLUX_ERR_SOURCE;
     }
 
@@ -37,7 +37,10 @@ int flux_search(int argc, char **argv, const char *usage) {
         if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) continue;
 
         if (strstr(recipe.name, query) || strstr(recipe.description, query)) {
-            printf("%-20s %s\n", recipe.name, recipe.description);
+            if (!found && flux_colors_enabled()) printf("\033[1m%-24s  DESCRIPTION\033[0m\n", "PACKAGE");
+            else if (!found) printf("%-24s  DESCRIPTION\n", "PACKAGE");
+            if (flux_colors_enabled()) printf("\033[32m%-24s\033[0m  %s\n", recipe.name, recipe.description);
+            else printf("%-24s  %s\n", recipe.name, recipe.description);
             found++;
         }
     }
@@ -45,7 +48,7 @@ int flux_search(int argc, char **argv, const char *usage) {
     closedir(dir);
 
     if (!found) {
-        printf("[flux] no results for '%s'\n", query);
+        flux_warn("no results for '%s'", query);
         return FLUX_ERR_NOT_FOUND;
     }
 
