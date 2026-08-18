@@ -59,15 +59,14 @@ int flux_update(int argc, char **argv, const char *usage) {
             char tmp_tar[FLUX_MAX_PATH_LEN];
             snprintf(tmp_tar, sizeof(tmp_tar), "/tmp/flux-recipes.tar.gz");
 
-            char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
-            snprintf(cmd, sizeof(cmd),
-                    "curl -L -o \"%s\" \"%s/archive/refs/heads/main.tar.gz\"",
-                    tmp_tar, FLUX_RECIPES_REPO_URL);
-            if (system(cmd) != 0) {
+            char archive_url[FLUX_MAX_URL_LEN + 32];
+            snprintf(archive_url, sizeof(archive_url), "%s/archive/refs/heads/main.tar.gz", FLUX_RECIPES_REPO_URL);
+            if (flux_download(archive_url, tmp_tar) != FLUX_ERR_NONE) {
                 flux_err("failed to download recipe repo");
                 return FLUX_ERR_NETWORK;
             }
 
+            char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
             snprintf(cmd, sizeof(cmd),
                     "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
                     config.local_repo_path, tmp_tar, config.local_repo_path);

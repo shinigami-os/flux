@@ -147,9 +147,8 @@ int flux_build(int argc, char **argv, const char *usage) {
         url_basename = url_basename ? url_basename + 1 : recipe.url;
         snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
-        flux_step("fetching source: %s", recipe.url);
-        snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", tarball, recipe.url);
-        if (system(cmd) != 0) {
+        flux_step("fetching source...");
+        if (flux_download(recipe.url, tarball) != FLUX_ERR_NONE) {
             flux_err("failed to fetch source");
             return FLUX_ERR_NETWORK;
         }

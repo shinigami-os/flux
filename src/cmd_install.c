@@ -89,9 +89,7 @@ static int try_flatpak_fallback(const char *pkg) {
 }
 
 static int fetch_source(const char *url, const char *dest) {
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "curl -L -o \"%s\" \"%s\"", dest, url);
-    return system(cmd);
+    return flux_download(url, dest);
 }
 
 static int verify_sha256(const char *path, const char *expected) {
@@ -565,7 +563,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         url_basename = url_basename ? url_basename + 1 : recipe.url;
         snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
-        flux_step("fetching source: %s", recipe.url);
+        flux_step("fetching source...");
         if (fetch_source(recipe.url, tarball) != 0) {
             flux_err("failed to fetch source");
             return FLUX_ERR_NETWORK;

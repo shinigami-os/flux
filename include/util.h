@@ -54,4 +54,6 @@ void flux_print_table(const char *title, const flux_table_row_t *rows, int count
 
 double flux_now_seconds(void);            // monotonic-ish wall clock for elapsed-time summaries
 
+int flux_download(const char *url, const char *dest); // silences curl's own meter, draws a styled progress bar instead
+
 #endif

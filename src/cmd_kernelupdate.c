@@ -65,8 +65,7 @@ static int download_signed_kernel(const char *cache_url, const char *version,
     char cmd[1024];
 
     snprintf(url, sizeof(url), "%s/kira-kernel/%s/%s", cache_url, version, filename);
-    snprintf(cmd, sizeof(cmd), "curl -fL --max-time 600 --retry 3 -o \"%s\" \"%s\"", dest, url);
-    if (system(cmd) != 0) return FLUX_ERR_NETWORK;
+    if (flux_download(url, dest) != FLUX_ERR_NONE) return FLUX_ERR_NETWORK;
 
     char sig_dest[FLUX_MAX_PATH_LEN + 8];
     snprintf(sig_dest, sizeof(sig_dest), "%s.minisig", dest);

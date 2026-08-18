@@ -38,8 +38,7 @@ static int download_signed(const char *base_url, const char *version, const char
     char cmd[1024];
 
     snprintf(url, sizeof(url), "%s/kira-base/%s/%s", base_url, version, filename);
-    snprintf(cmd, sizeof(cmd), "curl -fL --max-time 600 --retry 3 -o \"%s\" \"%s\"", dest, url);
-    if (system(cmd) != 0) return FLUX_ERR_NETWORK;
+    if (flux_download(url, dest) != FLUX_ERR_NONE) return FLUX_ERR_NETWORK;
 
     snprintf(url, sizeof(url), "%s/kira-base/%s/%s.minisig", base_url, version, filename);
     char sig_dest[FLUX_MAX_PATH_LEN + 8];

@@ -8,7 +8,9 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <dirent.h>
 #include <stdarg.h>
@@ -256,8 +258,7 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
 
     char dl_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
 
-    snprintf(dl_cmd, sizeof(dl_cmd), "curl -L --max-time 3600 --retry 3 -o \"%s\" \"%s/packages/%s.tar.zst\"", path_out, config.binary_cache_url, key);
-    if (system(dl_cmd) != 0) {
+    if (flux_download(remote_url, path_out) != FLUX_ERR_NONE) {
         remove(path_out);
         return FLUX_ERR_NOT_FOUND;
     }
@@ -562,4 +563,97 @@ double flux_now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static void format_bytes(double bytes, char *out, size_t outlen) {
+    static const char *units[] = {"B", "KB", "MB", "GB"};
+    int u = 0;
+    double v = bytes;
+    while (v >= 1024.0 && u < 3) { v /= 1024.0; u++; }
+    snprintf(out, outlen, "%.1f%s", v, units[u]);
+}
+
+// best-effort HEAD request; -1 if the server doesn't report a size
+static long fetch_content_length(const char *url) {
+    char cmd[FLUX_MAX_URL_LEN + 128];
+    snprintf(cmd, sizeof(cmd),
+        "curl -sIL --max-time 15 \"%s\" 2>/dev/null | tr -d '\\r'"
+        " | awk -F': ' 'tolower($1)==\"content-length\"{v=$2} END{print v}'", url);
+    FILE *f = popen(cmd, "r");
+    if (!f) return -1;
+    char buf[32] = {0};
+    long len = -1;
+    if (fgets(buf, sizeof(buf), f)) {
+        char *end;
+        long v = strtol(buf, &end, 10);
+        if (end != buf && v > 0) len = v;
+    }
+    pclose(f);
+    return len;
+}
+
+// downloads url to dest via a forked, silenced curl, drawing a Kira-purple
+// progress bar in its place instead of curl's own ASCII meter - falls back
+// to a plain byte counter when the server doesn't report a Content-Length,
+// and to two static lines (no live redraw) when stdout isn't a real tty
+int flux_download(const char *url, const char *dest) {
+    long total = fetch_content_length(url);
+    const char *base = strrchr(dest, '/');
+    base = base ? base + 1 : dest;
+    int tty = isatty(STDOUT_FILENO);
+    const char *purple = flux_colors_enabled() ? "\033[38;2;170;0;255m" : "";
+    const char *reset = flux_colors_enabled() ? "\033[0m" : "";
+
+    if (!tty) printf("  \xe2\x86\x93 %s\n", base); // ↓
+    remove(dest); // a stale leftover at dest would otherwise flash 100% for one frame before curl truncates it
+
+    pid_t pid = fork();
+    if (pid < 0) return FLUX_ERR_GENERAL;
+
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+        execlp("curl", "curl", "-fL", "--retry", "3", "--max-time", "3600", "-o", dest, url, (char *)NULL);
+        _exit(127);
+    }
+
+    struct stat st;
+    double t_start = flux_now_seconds();
+    int status = 0;
+    pid_t w;
+    const int bar_w = 30;
+
+    while ((w = waitpid(pid, &status, WNOHANG)) == 0) {
+        if (tty) {
+            long cur = (stat(dest, &st) == 0) ? (long)st.st_size : 0;
+            double elapsed = flux_now_seconds() - t_start;
+            char cur_s[16], rate_s[16];
+            format_bytes((double)cur, cur_s, sizeof(cur_s));
+            format_bytes(elapsed > 0.1 ? (double)cur / elapsed : 0, rate_s, sizeof(rate_s));
+
+            if (total > 0) {
+                int pct = (int)((cur * 100) / total);
+                if (pct > 100) pct = 100;
+                int filled = pct * bar_w / 100;
+                char tot_s[16];
+                format_bytes((double)total, tot_s, sizeof(tot_s));
+                printf("\r  %s[", purple);
+                for (int i = 0; i < bar_w; i++)
+                    fputs(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91", stdout); // █ / ░
+                printf("]%s %3d%%  %s/%s  %s/s\033[K", reset, pct, cur_s, tot_s, rate_s);
+            } else {
+                printf("\r  %s\xe2\x86\x93%s %s  %s  %s/s\033[K", purple, reset, base, cur_s, rate_s);
+            }
+            fflush(stdout);
+        }
+        struct timespec ts = {0, 150000000L};
+        nanosleep(&ts, NULL);
+    }
+    if (w < 0) return FLUX_ERR_GENERAL;
+
+    if (tty) printf("\r\033[K");
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return FLUX_ERR_NETWORK;
+    return FLUX_ERR_NONE;
 }
