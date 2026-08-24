@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.08-4"
+#define FLUX_VERSION "26.08-5"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
 #define KIRA_BASE_REPO_URL "https://github.com/shinigami-os/kira-base"
@@ -33,7 +33,9 @@
 #define FLUX_MAX_CFLAGS_LEN  1024
 #define FLUX_MAX_LDFLAGS_LEN 1024
 #define FLUX_MAX_PATH_LEN    256
-#define FLUX_MAX_INSTALLED_FILES 4096
+// heap-allocated wherever it's used (see cmd_install.c), not stack - several
+// already-installed packages were silently hitting the old 4096 cap
+#define FLUX_MAX_INSTALLED_FILES 32768
 #define FLUX_MAX_INSTALL_QUEUE 256
 
 

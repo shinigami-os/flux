@@ -478,8 +478,17 @@ int flux_install(int argc, char **argv, const char *usage) {
             return FLUX_ERR_GENERAL;
         }
 
-        char installed_files[FLUX_MAX_INSTALLED_FILES][FLUX_MAX_PATH_LEN];
-        const char *file_ptrs[FLUX_MAX_INSTALLED_FILES];
+        // heap, not stack: at FLUX_MAX_INSTALLED_FILES=32768 this is 8MB, and
+        // flux_install recurses for dependencies - stacking that per call
+        // is exactly what blew the stack installing elogind+polkit together
+        char (*installed_files)[FLUX_MAX_PATH_LEN] = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
+        const char **file_ptrs = malloc((size_t)FLUX_MAX_INSTALLED_FILES * sizeof(char *));
+        if (!installed_files || !file_ptrs) {
+            free(installed_files);
+            free(file_ptrs);
+            flux_err("out of memory");
+            return FLUX_ERR_GENERAL;
+        }
         int file_count = 0;
         collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
 
@@ -492,6 +501,8 @@ int flux_install(int argc, char **argv, const char *usage) {
         strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
         info.auto_installed = g_auto_installed;
         flux_db_register(&info, file_ptrs, file_count);
+        free(installed_files);
+        free(file_ptrs);
 
         char cleanup[512];
         snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\"", destdir);
@@ -527,9 +538,6 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     char build_dir[256];
     char tarball[512];
-    char installed_files[FLUX_MAX_INSTALLED_FILES][FLUX_MAX_PATH_LEN];
-    const char *file_ptrs[FLUX_MAX_INSTALLED_FILES];
-    int file_count = 0;
 
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
     tarball[0] = '\0';
@@ -655,6 +663,18 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_GENERAL;
     }
 
+    // heap, not stack: at FLUX_MAX_INSTALLED_FILES=32768 this is 8MB, and
+    // flux_install recurses for dependencies - stacking that per call is
+    // exactly what blew the stack installing elogind+polkit together
+    char (*installed_files)[FLUX_MAX_PATH_LEN] = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
+    const char **file_ptrs = malloc((size_t)FLUX_MAX_INSTALLED_FILES * sizeof(char *));
+    if (!installed_files || !file_ptrs) {
+        free(installed_files);
+        free(file_ptrs);
+        flux_err("out of memory");
+        return FLUX_ERR_GENERAL;
+    }
+    int file_count = 0;
     collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
 
     flux_pkg_info_t info;
@@ -666,6 +686,8 @@ int flux_install(int argc, char **argv, const char *usage) {
     strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
     info.auto_installed = g_auto_installed;
     flux_db_register(&info, file_ptrs, file_count);
+    free(installed_files);
+    free(file_ptrs);
 
     if (strlen(cache_key) > 0)
         flux_cache_store(cache_key, destdir, config.flux_secret_key_path);
