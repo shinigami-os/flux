@@ -20,7 +20,7 @@ int flux_base_update(int argc, char **argv, const char *usage);
 int flux_kernel_update(int argc, char **argv, const char *usage);
 
 flux_cmd_t commands[] = {
-    {"install", flux_install, "Install a package (from cache or compile)", "flux install [-y] [-f] <pkg>"},
+    {"install", flux_install, "Install one or more packages (from cache or compile)", "flux install [-y] [-f] <pkgs>"},
     {"search", flux_search, "Search available recipes", "flux search <query>"},
     {"build", flux_build, "Force local compilation regardless of cache", "flux build [--cross] <pkg>"},
     {"remove", flux_remove, "Remove a package, optionally its orphaned deps", "flux remove [-a] <pkg>"},

@@ -13,6 +13,15 @@
 static int g_auto_installed = 0;
 static int g_yes = 0;
 static int g_force = 0;
+// set only by install_batch's per-package recursive calls: dependency
+// resolution + the summary table + the confirmation prompt already happened
+// once for the whole batch, so each individual call should skip doing its
+// own - kept separate from g_auto_installed, which still has to reflect
+// whether THIS package was a root request or a pulled-in dep (DB bookkeeping
+// for `flux autoremove`, and the "Installing" vs "installing dependency" header)
+static int g_skip_deps = 0;
+
+static int install_batch(int argc, char **argv, const char *usage, flux_config_t *config);
 
 // returns FLUX_ERR_NOT_FOUND if flatpak is unusable or nothing matched, so the caller falls through to its own "no recipe found" error
 static int try_flatpak_fallback(const char *pkg) {
@@ -159,6 +168,15 @@ static int run_hook(const char *hook, const char *build_dir, const char *destdir
     return ret;
 }
 
+// true if pkg is installed and already at the recipe's current version - the
+// only case a plain (non -f) install should skip; a version mismatch means
+// an update is available and should proceed without needing -f
+static int is_installed_and_current(const char *pkg, const flux_recipe_t *recipe) {
+    flux_pkg_info_t info;
+    if (flux_db_read_info(pkg, &info) != FLUX_ERR_NONE) return 0;
+    return strcmp(info.version, recipe->version) == 0;
+}
+
 static int queue_contains(flux_install_queue_t *q, const char *name) {
     for (int i = 0; i < q->count; i++)
         if (strcmp(q->pkgs[i], name) == 0) return 1;
@@ -186,8 +204,9 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
 
     int has_source = (strlen(recipe.url) != 0);
 
-    // g_force is only set for the root package, which is what makes a force-reinstall still walk its current deps and pick up ones a newer recipe version added (e.g. sleex gaining sleex-ui-kit)
-    if (has_source && flux_db_is_installed(pkg) && !g_force) return FLUX_ERR_NONE;
+    // g_force is only set for the root package, which is what makes a force-reinstall still walk its current deps and pick up ones a newer recipe version added (e.g. sleex gaining sleex-ui-kit).
+    // a plain install (no -f) still walks past an installed dep whose recipe version moved on, same as the root package below - only a dep that's installed AND current gets skipped
+    if (has_source && !g_force && is_installed_and_current(pkg, &recipe)) return FLUX_ERR_NONE;
 
     // decide whether THIS package needs its own build deps pulled in.
     int has_install_hook = (strlen(recipe.hook_install) != 0);
@@ -296,7 +315,6 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
 
     const char *pkg = argv[0];
-    double t_start = flux_now_seconds();
 
     // load config
     flux_config_t config;
@@ -310,6 +328,12 @@ int flux_install(int argc, char **argv, const char *usage) {
         flux_err("hint: run 'flux update' to download the recipe repo");
         return FLUX_ERR_GENERAL;
     }
+
+    // more than one package name on a top-level call (not one of install_batch's
+    // own recursive single-package calls, which always pass argc == 1) - resolve
+    // and install all of them together instead of only ever looking at argv[0]
+    if (argc > 1 && !g_skip_deps)
+        return install_batch(argc, argv, usage, &config);
 
     // parse recipe
     char koto_path[FLUX_MAX_PATH_LEN * 2];
@@ -339,11 +363,18 @@ int flux_install(int argc, char **argv, const char *usage) {
     // pure meta-package: no source to fetch and no install hook to run
     int pure_meta = !has_source && !has_install_hook;
 
-    // meta-packages are never marked installed; they're always re-walked so their deps and hooks can pick up changes
+    // meta-packages are never marked installed; they're always re-walked so their deps and hooks can pick up changes.
+    // a plain install (no -f) still proceeds when the recipe version has moved past what's installed - only an
+    // installed package already at the current version is skipped; -f still forces a rebuild at the same version too
     if (has_source && flux_db_is_installed(pkg) && !g_force) {
-        if (!g_auto_installed) flux_db_set_auto_installed(pkg, 0);
-        flux_ok("%s is already installed", pkg);
-        return FLUX_ERR_NONE;
+        if (is_installed_and_current(pkg, &recipe)) {
+            if (!g_auto_installed) flux_db_set_auto_installed(pkg, 0);
+            flux_ok("%s is already installed", pkg);
+            return FLUX_ERR_NONE;
+        }
+        flux_pkg_info_t old_info;
+        if (flux_db_read_info(pkg, &old_info) == FLUX_ERR_NONE)
+            flux_step("updating %s: %s -> %s", pkg, old_info.version, recipe.version);
     }
 
     // meta-packages never touch the binary cache
@@ -381,7 +412,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
     }
 
-    if (!g_auto_installed) {
+    if (!g_skip_deps) {
         flux_install_queue_t queue;
         memset(&queue, 0, sizeof(queue));
         char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
@@ -471,7 +502,7 @@ int flux_install(int argc, char **argv, const char *usage) {
             return FLUX_ERR_BUILD;
         }
 
-        flux_ok("%s installed successfully (from cache) in %.1fs", pkg, flux_now_seconds() - t_start);
+        flux_ok("%s v%s installed", pkg, recipe.version);
         return FLUX_ERR_NONE;
     }
 
@@ -490,7 +521,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t_m);
         info.auto_installed = g_auto_installed;
         flux_db_register(&info, NULL, 0);
-        flux_ok("%s installed successfully (meta-package)", pkg);
+        flux_ok("%s v%s installed", pkg, recipe.version);
         return FLUX_ERR_NONE;
     }
 
@@ -563,10 +594,16 @@ int flux_install(int argc, char **argv, const char *usage) {
         url_basename = url_basename ? url_basename + 1 : recipe.url;
         snprintf(tarball, sizeof(tarball), "/tmp/flux-build/%s", url_basename);
 
-        flux_step("fetching source...");
-        if (fetch_source(recipe.url, tarball) != 0) {
-            flux_err("failed to fetch source");
-            return FLUX_ERR_NETWORK;
+        if (stat(tarball, &st) == 0 && st.st_size > 0) {
+            // install_batch's download phase already pulled this one in as
+            // part of the batch's aggregated progress bar
+            flux_step("using pre-fetched source...");
+        } else {
+            flux_step("fetching source...");
+            if (fetch_source(recipe.url, tarball) != 0) {
+                flux_err("failed to fetch source");
+                return FLUX_ERR_NETWORK;
+            }
         }
 
         flux_step("verifying checksum...");
@@ -646,6 +683,142 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_BUILD;
     }
 
-    flux_ok("%s installed successfully in %.1fs", pkg, flux_now_seconds() - t_start);
+    flux_ok("%s v%s installed", pkg, recipe.version);
     return FLUX_ERR_NONE;
+}
+
+// resolves + confirms + downloads + installs several top-level package names
+// in one call: dependency resolution happens once for the combined,
+// deduplicated set, every plain-tarball source gets pre-fetched behind one
+// aggregated progress bar, then each queue member installs in dependency
+// order via a recursive single-package call (g_skip_deps = 1, since the
+// resolution/table/confirmation above already covers it)
+static int install_batch(int argc, char **argv, const char *usage, flux_config_t *config) {
+    (void)usage;
+
+    flux_install_queue_t queue;
+    memset(&queue, 0, sizeof(queue));
+    char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    memset(visited, 0, sizeof(visited));
+    int visited_count = 0;
+
+    for (int i = 0; i < argc; i++) {
+        char koto_path[FLUX_MAX_PATH_LEN * 2];
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, argv[i]);
+        struct stat st;
+        if (stat(koto_path, &st) != 0) {
+            flux_err("no recipe found for '%s'", argv[i]);
+            return FLUX_ERR_NOT_FOUND;
+        }
+        int err = collect_deps(argv[i], config, &queue, visited, &visited_count);
+        if (err != FLUX_ERR_NONE) return err;
+    }
+
+    if (queue.count == 0) {
+        flux_ok("all packages are already installed");
+        return FLUX_ERR_NONE;
+    }
+
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    for (int i = 0; i < queue.count; i++) {
+        char kp[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i]);
+        flux_recipe_t r;
+        memset(&r, 0, sizeof(r));
+        parse_kotodama(&r, kp);
+
+        strncpy(rows[i].col1, queue.pkgs[i], FLUX_MAX_NAME_LEN - 1);
+        flux_pkg_info_t old_info;
+        if (flux_db_read_info(queue.pkgs[i], &old_info) == FLUX_ERR_NONE && strcmp(old_info.version, r.version) != 0)
+            snprintf(rows[i].col2, sizeof(rows[i].col2), "%s -> %s", old_info.version, r.version);
+        else
+            strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
+    }
+    char title[64];
+    snprintf(title, sizeof(title), "%d package%s will be installed",
+             queue.count, queue.count == 1 ? "" : "s");
+    printf("\n");
+    flux_print_table(title, rows, queue.count);
+    printf("\nProceed? [Y/n] ");
+    fflush(stdout);
+    if (g_yes) {
+        printf("Y\n");
+    } else {
+        char answer[8] = {0};
+        if (fgets(answer, sizeof(answer), stdin)) {
+            if (answer[0] == 'n' || answer[0] == 'N') {
+                printf("Aborted.\n");
+                return FLUX_ERR_NONE;
+            }
+        }
+    }
+    printf("\n");
+
+    char native_target[64];
+    const char *cache_target;
+    if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
+        cache_target = native_target;
+    } else {
+        cache_target = config->package_target;
+    }
+
+    flux_download_item_t downloads[FLUX_MAX_INSTALL_QUEUE];
+    int download_count = 0;
+    for (int i = 0; i < queue.count; i++) {
+        char kp[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i]);
+        flux_recipe_t r;
+        memset(&r, 0, sizeof(r));
+        parse_kotodama(&r, kp);
+
+        int has_source = (strlen(r.url) != 0);
+        int is_git = (has_source && strncmp(r.url, "git+", 4) == 0);
+        if (!has_source || is_git) continue;
+
+        char cache_key[256];
+        char cache_path[FLUX_MAX_PATH_LEN];
+        memset(cache_key, 0, sizeof(cache_key));
+        if (flux_cache_key(r.name, r.version, r.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE &&
+            flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
+            continue; // cached already, nothing to fetch
+        }
+
+        const char *url_basename = strrchr(r.url, '/');
+        url_basename = url_basename ? url_basename + 1 : r.url;
+        strncpy(downloads[download_count].url, r.url, FLUX_MAX_URL_LEN - 1);
+        snprintf(downloads[download_count].dest, sizeof(downloads[download_count].dest),
+                 "/tmp/flux-build/%s", url_basename);
+        download_count++;
+    }
+
+    if (download_count > 0) {
+        system("mkdir -p /tmp/flux-build");
+        if (flux_download_batch(downloads, download_count) != FLUX_ERR_NONE) {
+            flux_err("failed to download sources");
+            return FLUX_ERR_NETWORK;
+        }
+    }
+
+    int saved_force = g_force;
+    int overall_err = FLUX_ERR_NONE;
+    for (int i = 0; i < queue.count; i++) {
+        int is_root = 0;
+        for (int j = 0; j < argc; j++) {
+            if (strcmp(argv[j], queue.pkgs[i]) == 0) { is_root = 1; break; }
+        }
+        g_auto_installed = !is_root;
+        g_force = is_root ? saved_force : 0; // deps are never force-reinstalled, only roots are - same rule as the single-package path
+        g_skip_deps = 1;
+        char *one_argv[] = { queue.pkgs[i] };
+        int err = flux_install(1, one_argv, "flux install <pkg>");
+        g_skip_deps = 0;
+        if (err != FLUX_ERR_NONE) {
+            flux_err("failed to install '%s'", queue.pkgs[i]);
+            overall_err = is_root ? err : FLUX_ERR_DEPENDENCY;
+            break;
+        }
+    }
+    g_auto_installed = 0;
+    g_force = saved_force;
+    return overall_err;
 }

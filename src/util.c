@@ -657,3 +657,89 @@ int flux_download(const char *url, const char *dest) {
         return FLUX_ERR_NETWORK;
     return FLUX_ERR_NONE;
 }
+
+// downloads several files sequentially behind one shared progress bar (bytes
+// done across the whole batch / bytes total across the whole batch), instead
+// of flux_download's one-bar-per-file - falls back to a plain per-file
+// counter if any server in the batch doesn't report a Content-Length
+int flux_download_batch(const flux_download_item_t *items, int count) {
+    if (count <= 0) return FLUX_ERR_NONE;
+    if (count == 1) return flux_download(items[0].url, items[0].dest);
+
+    long totals[FLUX_MAX_INSTALL_QUEUE];
+    long grand_total = 0;
+    int have_all_sizes = 1;
+    for (int i = 0; i < count && i < FLUX_MAX_INSTALL_QUEUE; i++) {
+        totals[i] = fetch_content_length(items[i].url);
+        if (totals[i] < 0) have_all_sizes = 0;
+        else grand_total += totals[i];
+    }
+
+    int tty = isatty(STDOUT_FILENO);
+    const char *purple = flux_colors_enabled() ? "\033[38;2;170;0;255m" : "";
+    const char *reset = flux_colors_enabled() ? "\033[0m" : "";
+    const int bar_w = 30;
+    long done_bytes = 0;
+
+    printf("Downloading %d packages...\n", count);
+    for (int i = 0; i < count; i++) {
+        const char *base = strrchr(items[i].dest, '/');
+        base = base ? base + 1 : items[i].dest;
+        if (!tty) printf("  \xe2\x86\x93 %s (%d/%d)\n", base, i + 1, count); // ↓
+        remove(items[i].dest);
+
+        pid_t pid = fork();
+        if (pid < 0) return FLUX_ERR_GENERAL;
+
+        if (pid == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); close(devnull); }
+            execlp("curl", "curl", "-fL", "--retry", "3", "--max-time", "3600", "-o", items[i].dest, items[i].url, (char *)NULL);
+            _exit(127);
+        }
+
+        struct stat st;
+        double t_start = flux_now_seconds();
+        int status = 0;
+        pid_t w;
+
+        while ((w = waitpid(pid, &status, WNOHANG)) == 0) {
+            if (tty) {
+                long cur = (stat(items[i].dest, &st) == 0) ? (long)st.st_size : 0;
+                double elapsed = flux_now_seconds() - t_start;
+                char cur_s[16], rate_s[16];
+                format_bytes((double)(done_bytes + cur), cur_s, sizeof(cur_s));
+                format_bytes(elapsed > 0.1 ? (double)cur / elapsed : 0, rate_s, sizeof(rate_s));
+
+                if (have_all_sizes && grand_total > 0) {
+                    int pct = (int)(((done_bytes + cur) * 100) / grand_total);
+                    if (pct > 100) pct = 100;
+                    int filled = pct * bar_w / 100;
+                    char tot_s[16];
+                    format_bytes((double)grand_total, tot_s, sizeof(tot_s));
+                    printf("\r  %s[", purple);
+                    for (int b = 0; b < bar_w; b++)
+                        fputs(b < filled ? "\xe2\x96\x88" : "\xe2\x96\x91", stdout); // █ / ░
+                    printf("]%s %3d%%  (%d/%d)  %s/%s  %s/s\033[K", reset, pct, i + 1, count, cur_s, tot_s, rate_s);
+                } else {
+                    printf("\r  %s\xe2\x86\x93%s (%d/%d) %s  %s  %s/s\033[K", purple, reset, i + 1, count, base, cur_s, rate_s);
+                }
+                fflush(stdout);
+            }
+            struct timespec ts = {0, 150000000L};
+            nanosleep(&ts, NULL);
+        }
+        if (w < 0) return FLUX_ERR_GENERAL;
+
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            if (tty) printf("\r\033[K");
+            flux_err("failed to download %s", base);
+            return FLUX_ERR_NETWORK;
+        }
+
+        struct stat fst;
+        done_bytes += (stat(items[i].dest, &fst) == 0) ? (long)fst.st_size : (totals[i] > 0 ? totals[i] : 0);
+    }
+    if (tty) printf("\r\033[K");
+    return FLUX_ERR_NONE;
+}

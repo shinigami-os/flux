@@ -56,4 +56,13 @@ double flux_now_seconds(void);            // monotonic-ish wall clock for elapse
 
 int flux_download(const char *url, const char *dest); // silences curl's own meter, draws a styled progress bar instead
 
+typedef struct {
+    char url[FLUX_MAX_URL_LEN];
+    char dest[FLUX_MAX_PATH_LEN];
+} flux_download_item_t;
+
+// same as flux_download but for several files at once: one bar tracking
+// cumulative bytes across the whole batch instead of one bar per file
+int flux_download_batch(const flux_download_item_t *items, int count);
+
 #endif
