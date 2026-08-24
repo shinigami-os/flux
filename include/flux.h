@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.08-5"
+#define FLUX_VERSION "26.08-6"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
 #define KIRA_BASE_REPO_URL "https://github.com/shinigami-os/kira-base"

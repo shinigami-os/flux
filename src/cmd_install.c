@@ -458,8 +458,16 @@ int flux_install(int argc, char **argv, const char *usage) {
         g_force = 0;          /* deps are never force-reinstalled, only the root package is */
         g_auto_installed = 1;
         for (int i = 0; i < queue.count - 1; i++) {
+            // this queue is already the fully-resolved transitive closure,
+            // cycles included (e.g. elogind <-> polkit) - re-resolving from
+            // here would give each recursive call its own fresh visited set,
+            // and a genuine cycle would recurse forever each half trying to
+            // install the other first. g_skip_deps makes the nested call
+            // just install this one entry instead of resolving again.
+            g_skip_deps = 1;
             char *dep_argv[] = { queue.pkgs[i] };
             int dep_err = flux_install(1, dep_argv, "flux install <pkg>");
+            g_skip_deps = 0;
             if (dep_err != FLUX_ERR_NONE) {
                 flux_err("failed to install dependency '%s'", queue.pkgs[i]);
                 g_auto_installed = 0;
