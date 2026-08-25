@@ -732,11 +732,18 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     memset(visited, 0, sizeof(visited));
     int visited_count = 0;
 
+    int any_flatpak = 0;
     for (int i = 0; i < argc; i++) {
         char koto_path[FLUX_MAX_PATH_LEN * 2];
         snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, argv[i]);
         struct stat st;
         if (stat(koto_path, &st) != 0) {
+            int fp_err = try_flatpak_fallback(argv[i]);
+            if (fp_err != FLUX_ERR_NOT_FOUND) {
+                if (fp_err != FLUX_ERR_NONE) return fp_err;
+                any_flatpak = 1;
+                continue;
+            }
             flux_err("no recipe found for '%s'", argv[i]);
             return FLUX_ERR_NOT_FOUND;
         }
@@ -745,7 +752,7 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     }
 
     if (queue.count == 0) {
-        flux_ok("all packages are already installed");
+        if (!any_flatpak) flux_ok("all packages are already installed");
         return FLUX_ERR_NONE;
     }
 
