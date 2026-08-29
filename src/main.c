@@ -12,7 +12,6 @@ int flux_update(int argc, char **argv, const char *usage);
 int flux_info(int argc, char **argv, const char *usage);
 int flux_list(int argc, char **argv, const char *usage);
 int flux_cache(int argc, char **argv, const char *usage);
-int flux_compat(int argc, char **argv, const char *usage);
 int flux_autoremove(int argc, char **argv, const char *usage);
 int flux_version(int argc, char **argv, const char *usage);
 int flux_self_update(int argc, char **argv, const char *usage);
@@ -29,7 +28,6 @@ flux_cmd_t commands[] = {
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},
     {"list", flux_list, "List installed packages", "flux list [-a]"},
     {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
-    {"compat", flux_compat, "Install via Debian compat container", "flux compat <pkg>"},
     {"version", flux_version, "Show the installed flux version", "flux version"},
     {"self-update", flux_self_update, "Rebuild and replace flux from the latest release", "flux self-update [-f]"},
     {"base-update", flux_base_update, "Update kira-base's core image to the latest release", "flux base-update [-f]"},

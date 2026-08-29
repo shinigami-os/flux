@@ -30,7 +30,6 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux list [-a]` | List installed packages, sorted alphabetically. `-a`/`--auto` also includes auto-installed deps |
 | `flux build [--cross] <pkg>` | Force local compilation, optionally against the cross sysroot |
 | `flux cache clean [--all\|--unused]` | Manage the local binary cache (not yet implemented, stub) |
-| `flux compat <pkg>` | Install via Debian compat container (Phase 3, stub) |
 | `flux version` | Print the installed flux version |
 | `flux self-update` | Rebuild flux from the latest release tag and atomically replace the running binary |
 | `flux base-update` | Update kira-base's core image (musl, BusyBox, runit, eudev, curl) to the latest release |
@@ -196,7 +195,7 @@ The Shinigami kernel is versioned as `<linux-version>-shinigami-<shinigami-versi
 
 ## Status
 
-Phase 3. `install`, `remove`, `autoremove`, `search`, `update`, `info`, `list`, `build`, `cache`, `version`, `self-update`, `base-update`, `kernel-update` are fully working, including cross-compilation, real per-package dependency resolution, a local + remote binary cache, and a fully-implemented auto-installed/orphan tracking model. `compat` (Debian compat container fallback) is still a stub, not yet implemented.
+Phase 3. `install`, `remove`, `autoremove`, `search`, `update`, `info`, `list`, `build`, `cache`, `version`, `self-update`, `base-update`, `kernel-update` are fully working, including cross-compilation, real per-package dependency resolution, a local + remote binary cache, and a fully-implemented auto-installed/orphan tracking model.
 
 See the [Kira Linux specification](https://github.com/shinigami-os) and the full project roadmap.
 
