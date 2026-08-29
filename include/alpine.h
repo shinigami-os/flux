@@ -1,0 +1,62 @@
+#ifndef ALPINE_H
+#define ALPINE_H
+
+#include "flux.h"
+#include <stddef.h>
+
+#define ALPINE_MAX_NAME_LEN       64
+#define ALPINE_MAX_VERSION_LEN    48   // Alpine versions carry -rN suffixes, e.g. "1.2.3-r10"
+#define ALPINE_MAX_DESC_LEN       256
+#define ALPINE_MAX_URL_LEN        256
+#define ALPINE_MAX_LICENSE_LEN    64
+#define ALPINE_MAX_ARCH_LEN       16
+#define ALPINE_MAX_ORIGIN_LEN     64
+#define ALPINE_MAX_CHECKSUM_LEN   96
+#define ALPINE_MAX_DEP_TOKEN_LEN  96
+// per-call cap when tokenizing one package's D:/p: line at resolve time -
+// real edge index has outliers up to ~110 deps / ~255 provides on a few
+// split packages, so this is sized well above that, not the common case
+#define ALPINE_MAX_TOKENS_PER_LINE 320
+
+typedef struct {
+    char token[ALPINE_MAX_DEP_TOKEN_LEN];
+} alpine_dep_t;
+
+// one parsed APKINDEX stanza. depends_raw/provides_raw point into the
+// owning alpine_index_t's raw_text instead of being copied - across the
+// full ~24000-package edge index, storing every D:/p: line as its own
+// fixed-size token array would run into the hundreds of MB for outlier
+// packages alone. alpine_parse_dep_line() tokenizes on demand, only for
+// the one package actually being resolved.
+typedef struct {
+    char name[ALPINE_MAX_NAME_LEN];
+    char version[ALPINE_MAX_VERSION_LEN];
+    char arch[ALPINE_MAX_ARCH_LEN];
+    char description[ALPINE_MAX_DESC_LEN];
+    char url[ALPINE_MAX_URL_LEN];
+    char license[ALPINE_MAX_LICENSE_LEN];
+    char origin[ALPINE_MAX_ORIGIN_LEN];
+    char checksum[ALPINE_MAX_CHECKSUM_LEN];
+    long size;
+    long installed_size;
+    const char *depends_raw;
+    const char *provides_raw;
+} alpine_pkg_t;
+
+#define ALPINE_MAX_INDEX_PKGS 24000 // edge main+community currently well under this
+
+typedef struct {
+    char *raw_text;
+    alpine_pkg_t *pkgs;
+    int count;
+} alpine_index_t;
+
+int alpine_arch_from_target(const char *package_target, char *out, size_t outlen);
+int alpine_index_url(const flux_config_t *config, const char *repo, const char *arch, char *out, size_t outlen);
+int alpine_index_fetch(const flux_config_t *config, const char *repo, const char *arch, char *path_out, size_t path_outlen);
+int alpine_index_load(const char *tar_gz_path, alpine_index_t *index);
+void alpine_index_free(alpine_index_t *index);
+alpine_pkg_t *alpine_index_find(alpine_index_t *index, const char *name);
+int alpine_parse_dep_line(const char *raw, alpine_dep_t *out, int max, int *count);
+
+#endif

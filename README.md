@@ -114,7 +114,11 @@ cross_compile_sysroot = /opt/musl-cross/x86_64-linux-musl
 cross_toolchain_path = /opt/musl-cross/bin
 cross_gcc_libpath = /opt/musl-cross/lib/gcc/x86_64-linux-musl/9.4.0
 package_target = x86_64-linux-musl
+alpine_mirror_url = https://dl-cdn.alpinelinux.org/alpine
+alpine_branch = edge
 ```
+
+`alpine_mirror_url`/`alpine_branch` default to Alpine's own CDN and the `edge` branch if left unset - set `alpine_branch = stable` to track Alpine's stable branch instead.
 
 `flux_secret_key_path` only needs to exist on a machine that publishes packages. If it's missing, `flux build`/`flux install` skip cache signing and storage instead of failing.
 

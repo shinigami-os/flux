@@ -72,9 +72,17 @@ int flux_load_config(flux_config_t *config) {
         if (strcmp(key, "cross_toolchain_path") == 0) strncpy(config->flux_cross_toolchain_path, val, FLUX_MAX_PATH_LEN - 1);
         if (strcmp(key, "cross_gcc_libpath") == 0) strncpy(config->flux_cross_gcc_libpath , val, FLUX_MAX_PATH_LEN - 1);
         if (strcmp(key, "package_target") == 0) strncpy(config->package_target, val, sizeof(config->package_target) - 1);
+        if (strcmp(key, "alpine_mirror_url") == 0) strncpy(config->alpine_mirror_url, val, FLUX_MAX_URL_LEN - 1);
+        if (strcmp(key, "alpine_branch") == 0) strncpy(config->alpine_branch, val, sizeof(config->alpine_branch) - 1);
     }
 
     fclose(f);
+
+    if (config->alpine_mirror_url[0] == '\0')
+        strncpy(config->alpine_mirror_url, "https://dl-cdn.alpinelinux.org/alpine", FLUX_MAX_URL_LEN - 1);
+    if (config->alpine_branch[0] == '\0')
+        strncpy(config->alpine_branch, "edge", sizeof(config->alpine_branch) - 1);
+
     return FLUX_ERR_NONE;
 }
 
