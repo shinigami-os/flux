@@ -59,4 +59,14 @@ void alpine_index_free(alpine_index_t *index);
 alpine_pkg_t *alpine_index_find(alpine_index_t *index, const char *name);
 int alpine_parse_dep_line(const char *raw, alpine_dep_t *out, int max, int *count);
 
+// a .apk is 3 concatenated, independently-valid gzip streams: signature,
+// control (.PKGINFO + any pre/post-install scripts), data (the real files).
+// downloaded once, then split into 3 separate files so the control member
+// can be checked/verified without ever touching the (potentially huge) data
+// member, and so only the data member's files land in a package's destdir.
+int alpine_apk_url(const flux_config_t *config, const char *repo, const char *arch, const char *name, const char *version, char *out, size_t outlen);
+int alpine_apk_download(const flux_config_t *config, const char *repo, const char *arch, const char *name, const char *version, char *path_out, size_t path_outlen);
+int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *control_path_out, char *data_path_out, size_t path_outlen);
+int alpine_apk_extract(const char *member_tar_gz_path, const char *destdir);
+
 #endif
