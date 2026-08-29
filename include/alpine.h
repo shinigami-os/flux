@@ -69,4 +69,12 @@ int alpine_apk_download(const flux_config_t *config, const char *repo, const cha
 int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *control_path_out, char *data_path_out, size_t path_outlen);
 int alpine_apk_extract(const char *member_tar_gz_path, const char *destdir);
 
+#define ALPINE_KEYS_DIR "/etc/flux/alpine-keys"
+
+// verifies the control member's compressed bytes against the detached RSA
+// signature carried in the sig member, against a vendored trusted key in
+// keys_dir - matches Alpine's own abuild-sign scheme (sha1 digest, RSA
+// PKCS1v15, over the control member's raw compressed bytes, not decompressed)
+int alpine_verify_control(const char *control_tar_gz_path, const char *sig_tar_gz_path, const char *keys_dir);
+
 #endif
