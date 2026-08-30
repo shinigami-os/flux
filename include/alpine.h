@@ -69,6 +69,29 @@ int alpine_apk_download(const flux_config_t *config, const char *repo, const cha
 int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *control_path_out, char *data_path_out, size_t path_outlen);
 int alpine_apk_extract(const char *member_tar_gz_path, const char *destdir);
 
+// main + community held together for the lifetime of one dependency walk,
+// so resolving N dependencies doesn't refetch/reparse the index N times
+typedef struct {
+    alpine_index_t main;
+    alpine_index_t community;
+} alpine_repos_t;
+
+int alpine_repos_load(const flux_config_t *config, const char *arch, alpine_repos_t *repos);
+void alpine_repos_free(alpine_repos_t *repos);
+const alpine_pkg_t *alpine_repos_find_by_name(const alpine_repos_t *repos, const char *name, const char **out_repo);
+const alpine_pkg_t *alpine_repos_find_provider(const alpine_repos_t *repos, const char *capability_token, const char **out_repo);
+
+#define ALPINE_MAX_RESOLVED_DEPS 128
+
+// resolves one Alpine package's raw D: tokens into concrete package names:
+// so:/cmd:/pc: virtual capabilities and plain name+version-constraint tokens
+// are all resolved down to whichever real package provides them (greedy,
+// first match, no backtracking - see the scope doc). "!pkg" conflict tokens
+// are returned separately rather than treated as dependencies to install
+int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
+                         char names_out[][ALPINE_MAX_NAME_LEN], int max_names, int *names_count,
+                         char conflicts_out[][ALPINE_MAX_NAME_LEN], int max_conflicts, int *conflicts_count);
+
 #define ALPINE_KEYS_DIR "/etc/flux/alpine-keys"
 
 // verifies the control member's compressed bytes against the detached RSA

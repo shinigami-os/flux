@@ -181,11 +181,35 @@ static int is_installed_and_current(const char *pkg, const flux_recipe_t *recipe
 
 static int queue_contains(flux_install_queue_t *q, const char *name) {
     for (int i = 0; i < q->count; i++)
-        if (strcmp(q->pkgs[i], name) == 0) return 1;
+        if (strcmp(q->pkgs[i].name, name) == 0) return 1;
     return 0;
 }
 
-static int collect_deps(const char *pkg, flux_config_t *config, flux_install_queue_t *queue, char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
+// bundles the state a mixed kotodama+Alpine dependency walk needs beyond
+// just the config: the Alpine index (fetched at most once per walk, not
+// once per dependency) and the set of names ruled out by a "!pkg" conflict
+// token encountered anywhere in the tree so far
+typedef struct {
+    flux_config_t *config;
+    alpine_repos_t repos;
+    int repos_loaded;
+    char forbidden[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int forbidden_count;
+} collect_ctx_t;
+
+static int ensure_alpine_repos(collect_ctx_t *ctx) {
+    if (ctx->repos_loaded) return FLUX_ERR_NONE;
+
+    char arch[ALPINE_MAX_ARCH_LEN];
+    if (alpine_arch_from_target(ctx->config->package_target, arch, sizeof(arch)) != FLUX_ERR_NONE)
+        return FLUX_ERR_GENERAL;
+
+    int err = alpine_repos_load(ctx->config, arch, &ctx->repos);
+    ctx->repos_loaded = 1;
+    return err;
+}
+
+static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_t *queue, char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
     for (int i = 0; i < *visited_count; i++)
         if (strcmp(visited[i], pkg) == 0) return FLUX_ERR_NONE;
 
@@ -194,6 +218,55 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         (*visited_count)++;
     }
 
+    if (!flux_is_kira_pkg(pkg)) {
+        for (int i = 0; i < ctx->forbidden_count; i++) {
+            if (strcmp(ctx->forbidden[i], pkg) == 0) {
+                flux_err("'%s' conflicts with another package already required by this install", pkg);
+                return FLUX_ERR_DEPENDENCY;
+            }
+        }
+
+        if (ensure_alpine_repos(ctx) != FLUX_ERR_NONE) {
+            flux_err("failed to load Alpine package index");
+            return FLUX_ERR_NETWORK;
+        }
+
+        const alpine_pkg_t *p = alpine_repos_find_by_name(&ctx->repos, pkg, NULL);
+        if (!p) {
+            flux_err("no package found for '%s'", pkg);
+            return FLUX_ERR_NOT_FOUND;
+        }
+
+        char dep_names[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
+        int dep_count = 0;
+        char conflicts[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
+        int conflict_count = 0;
+        alpine_resolve_deps(&ctx->repos, p, dep_names, ALPINE_MAX_RESOLVED_DEPS, &dep_count,
+                             conflicts, ALPINE_MAX_RESOLVED_DEPS, &conflict_count);
+
+        for (int i = 0; i < conflict_count; i++) {
+            if (queue_contains(queue, conflicts[i])) {
+                flux_err("'%s' conflicts with '%s', already required by this install", pkg, conflicts[i]);
+                return FLUX_ERR_DEPENDENCY;
+            }
+            if (ctx->forbidden_count < FLUX_MAX_INSTALL_QUEUE)
+                strncpy(ctx->forbidden[ctx->forbidden_count++], conflicts[i], FLUX_MAX_NAME_LEN - 1);
+        }
+
+        for (int i = 0; i < dep_count; i++) {
+            int err = collect_deps(dep_names[i], ctx, queue, visited, visited_count);
+            if (err != FLUX_ERR_NONE) return err;
+        }
+
+        if (!queue_contains(queue, pkg) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
+            strncpy(queue->pkgs[queue->count].name, pkg, FLUX_MAX_NAME_LEN - 1);
+            queue->pkgs[queue->count].source = 'A';
+            queue->count++;
+        }
+        return FLUX_ERR_NONE;
+    }
+
+    flux_config_t *config = ctx->config;
     char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg);
 
@@ -248,13 +321,14 @@ static int collect_deps(const char *pkg, flux_config_t *config, flux_install_que
         if (!lists[l]) continue;
         for (int i = 0; i < counts[l]; i++) {
             if (strlen(lists[l][i]) == 0) continue;
-            int err = collect_deps(lists[l][i], config, queue, visited, visited_count);
+            int err = collect_deps(lists[l][i], ctx, queue, visited, visited_count);
             if (err != FLUX_ERR_NONE) return err;
         }
     }
 
     if (!queue_contains(queue, pkg) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
-        strncpy(queue->pkgs[queue->count], pkg, FLUX_MAX_NAME_LEN - 1);
+        strncpy(queue->pkgs[queue->count].name, pkg, FLUX_MAX_NAME_LEN - 1);
+        queue->pkgs[queue->count].source = 'K';
         queue->count++;
     }
 
@@ -540,19 +614,27 @@ int flux_install(int argc, char **argv, const char *usage) {
         memset(visited, 0, sizeof(visited));
         int visited_count = 0;
 
-        int err2 = collect_deps(pkg, &config, &queue, visited, &visited_count);
-        if (err2 != FLUX_ERR_NONE) return err2;
+        collect_ctx_t ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.config = &config;
 
-        if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0], pkg) != 0)) {
+        int err2 = collect_deps(pkg, &ctx, &queue, visited, &visited_count);
+        if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
+
+        if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0].name, pkg) != 0)) {
             flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
             for (int i = 0; i < queue.count; i++) {
-                char kp[FLUX_MAX_PATH_LEN * 2 + 16];
-                snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i]);
-                flux_recipe_t r;
-                memset(&r, 0, sizeof(r));
-                parse_kotodama(&r, kp);
-                strncpy(rows[i].col1, queue.pkgs[i], FLUX_MAX_NAME_LEN - 1);
-                strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
+                strncpy(rows[i].col1, queue.pkgs[i].name, FLUX_MAX_NAME_LEN - 1);
+                if (queue.pkgs[i].source == 'A') {
+                    strncpy(rows[i].col2, "alpine", FLUX_MAX_VERSION_LEN - 1);
+                } else {
+                    char kp[FLUX_MAX_PATH_LEN * 2 + 16];
+                    snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i].name);
+                    flux_recipe_t r;
+                    memset(&r, 0, sizeof(r));
+                    parse_kotodama(&r, kp);
+                    strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
+                }
             }
             char title[64];
             snprintf(title, sizeof(title), "%d package%s will be installed",
@@ -586,18 +668,20 @@ int flux_install(int argc, char **argv, const char *usage) {
             // install the other first. g_skip_deps makes the nested call
             // just install this one entry instead of resolving again.
             g_skip_deps = 1;
-            char *dep_argv[] = { queue.pkgs[i] };
+            char *dep_argv[] = { queue.pkgs[i].name };
             int dep_err = flux_install(1, dep_argv, "flux install <pkg>");
             g_skip_deps = 0;
             if (dep_err != FLUX_ERR_NONE) {
-                flux_err("failed to install dependency '%s'", queue.pkgs[i]);
+                flux_err("failed to install dependency '%s'", queue.pkgs[i].name);
                 g_auto_installed = 0;
                 g_force = saved_force;
+                alpine_repos_free(&ctx.repos);
                 return FLUX_ERR_DEPENDENCY;
             }
         }
         g_auto_installed = 0;
         g_force = saved_force;
+        alpine_repos_free(&ctx.repos);
     }
 
     if (cache_hit) {
@@ -856,41 +940,48 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     memset(visited, 0, sizeof(visited));
     int visited_count = 0;
 
-    int any_flatpak = 0;
+    collect_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.config = config;
+
     for (int i = 0; i < argc; i++) {
-        char koto_path[FLUX_MAX_PATH_LEN * 2];
-        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, argv[i]);
-        struct stat st;
-        if (stat(koto_path, &st) != 0) {
-            int fp_err = try_flatpak_fallback(argv[i]);
-            if (fp_err != FLUX_ERR_NOT_FOUND) {
-                if (fp_err != FLUX_ERR_NONE) return fp_err;
-                any_flatpak = 1;
-                continue;
+        if (flux_is_kira_pkg(argv[i])) {
+            char koto_path[FLUX_MAX_PATH_LEN * 2];
+            snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, argv[i]);
+            struct stat st;
+            if (stat(koto_path, &st) != 0) {
+                flux_err("no recipe found for '%s'", argv[i]);
+                alpine_repos_free(&ctx.repos);
+                return FLUX_ERR_NOT_FOUND;
             }
-            flux_err("no recipe found for '%s'", argv[i]);
-            return FLUX_ERR_NOT_FOUND;
         }
-        int err = collect_deps(argv[i], config, &queue, visited, &visited_count);
-        if (err != FLUX_ERR_NONE) return err;
+        int err = collect_deps(argv[i], &ctx, &queue, visited, &visited_count);
+        if (err != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err; }
     }
 
     if (queue.count == 0) {
-        if (!any_flatpak) flux_ok("all packages are already installed");
+        flux_ok("all packages are already installed");
+        alpine_repos_free(&ctx.repos);
         return FLUX_ERR_NONE;
     }
 
     flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
     for (int i = 0; i < queue.count; i++) {
+        strncpy(rows[i].col1, queue.pkgs[i].name, FLUX_MAX_NAME_LEN - 1);
+
+        if (queue.pkgs[i].source == 'A') {
+            strncpy(rows[i].col2, "alpine", FLUX_MAX_VERSION_LEN - 1);
+            continue;
+        }
+
         char kp[FLUX_MAX_PATH_LEN * 2 + 16];
-        snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i]);
+        snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i].name);
         flux_recipe_t r;
         memset(&r, 0, sizeof(r));
         parse_kotodama(&r, kp);
 
-        strncpy(rows[i].col1, queue.pkgs[i], FLUX_MAX_NAME_LEN - 1);
         flux_pkg_info_t old_info;
-        if (flux_db_read_info(queue.pkgs[i], &old_info) == FLUX_ERR_NONE && strcmp(old_info.version, r.version) != 0)
+        if (flux_db_read_info(queue.pkgs[i].name, &old_info) == FLUX_ERR_NONE && strcmp(old_info.version, r.version) != 0)
             snprintf(rows[i].col2, sizeof(rows[i].col2), "%s -> %s", old_info.version, r.version);
         else
             strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
@@ -926,8 +1017,10 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     flux_download_item_t downloads[FLUX_MAX_INSTALL_QUEUE];
     int download_count = 0;
     for (int i = 0; i < queue.count; i++) {
+        if (queue.pkgs[i].source == 'A') continue;
+
         char kp[FLUX_MAX_PATH_LEN * 2 + 16];
-        snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i]);
+        snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i].name);
         flux_recipe_t r;
         memset(&r, 0, sizeof(r));
         parse_kotodama(&r, kp);
@@ -965,21 +1058,22 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     for (int i = 0; i < queue.count; i++) {
         int is_root = 0;
         for (int j = 0; j < argc; j++) {
-            if (strcmp(argv[j], queue.pkgs[i]) == 0) { is_root = 1; break; }
+            if (strcmp(argv[j], queue.pkgs[i].name) == 0) { is_root = 1; break; }
         }
         g_auto_installed = !is_root;
         g_force = is_root ? saved_force : 0; // deps are never force-reinstalled, only roots are - same rule as the single-package path
         g_skip_deps = 1;
-        char *one_argv[] = { queue.pkgs[i] };
+        char *one_argv[] = { queue.pkgs[i].name };
         int err = flux_install(1, one_argv, "flux install <pkg>");
         g_skip_deps = 0;
         if (err != FLUX_ERR_NONE) {
-            flux_err("failed to install '%s'", queue.pkgs[i]);
+            flux_err("failed to install '%s'", queue.pkgs[i].name);
             overall_err = is_root ? err : FLUX_ERR_DEPENDENCY;
             break;
         }
     }
     g_auto_installed = 0;
     g_force = saved_force;
+    alpine_repos_free(&ctx.repos);
     return overall_err;
 }

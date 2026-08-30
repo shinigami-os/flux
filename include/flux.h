@@ -96,7 +96,12 @@ typedef struct {
 } flux_pkg_info_t;
 
 typedef struct {
-    char pkgs[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    char name[FLUX_MAX_NAME_LEN];
+    char source; // 'K' = kotodama, 'A' = alpine
+} flux_queue_entry_t;
+
+typedef struct {
+    flux_queue_entry_t pkgs[FLUX_MAX_INSTALL_QUEUE];
     int  count;
 } flux_install_queue_t;
 
