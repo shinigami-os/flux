@@ -31,23 +31,24 @@ int flux_info(int argc, char **argv, const char *usage) {
     int installed = flux_db_is_installed(pkg);
     int c = flux_colors_enabled();
 
+    flux_pkg_info_t db_info;
+    int have_db_info = installed && flux_db_read_info(pkg, &db_info) == FLUX_ERR_NONE;
+
     printf("\n");
     if (c) printf("\033[1;35m%s\033[0m\n", has_recipe ? recipe.name : pkg);
     else printf("%s\n", has_recipe ? recipe.name : pkg);
     flux_rule();
-    printf("  %-16s %s\n",   "version:",     has_recipe ? recipe.version     : "unknown");
+    printf("  %-16s %s\n",   "version:",     has_recipe ? recipe.version : (have_db_info ? db_info.version : "unknown"));
     printf("  %-16s %s\n",   "description:", has_recipe ? recipe.description : "unknown");
     printf("  %-16s %s\n",   "license:",     has_recipe ? recipe.license     : "unknown");
     printf("  %-16s %dMB\n", "size:",        has_recipe ? recipe.size        : 0);
     if (c) printf("  %-16s \033[%sm%s\033[0m\n", "status:", installed ? "32" : "33", installed ? "installed" : "not installed");
     else printf("  %-16s %s\n", "status:", installed ? "installed" : "not installed");
 
-    if (installed) {
-        flux_pkg_info_t db_info;
-        if (flux_db_read_info(pkg, &db_info) == FLUX_ERR_NONE) {
-            printf("  %-16s %s\n", "installed on:", db_info.install_date);
-            printf("  %-16s %s\n", "auto-installed:", db_info.auto_installed ? "yes" : "no");
-        }
+    if (have_db_info) {
+        printf("  %-16s %s\n", "source:", db_info.source);
+        printf("  %-16s %s\n", "installed on:", db_info.install_date);
+        printf("  %-16s %s\n", "auto-installed:", db_info.auto_installed ? "yes" : "no");
     }
 
     if (has_recipe && strlen(recipe.deps[0]) > 0) {

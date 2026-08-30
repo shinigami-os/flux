@@ -106,6 +106,7 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     fprintf(f, "version = %s\n", info->version);
     fprintf(f, "install_date = %s\n", info->install_date);
     fprintf(f, "auto_installed = %d\n", info->auto_installed);
+    fprintf(f, "source = %s\n", info->source);
     fclose(f);
 
     char files_path[FLUX_MAX_PATH_LEN + 8];
@@ -353,8 +354,10 @@ int flux_db_read_info(const char *name, flux_pkg_info_t *info) {
         if (strcmp(key, "version") == 0) strncpy(info->version, val, FLUX_MAX_VERSION_LEN - 1);
         if (strcmp(key, "install_date") == 0) strncpy(info->install_date, val, sizeof(info->install_date) - 1);
         if (strcmp(key, "auto_installed") == 0) info->auto_installed = atoi(val);
+        if (strcmp(key, "source") == 0) strncpy(info->source, val, sizeof(info->source) - 1);
     }
     fclose(f);
+    if (info->source[0] == '\0') strncpy(info->source, "kotodama", sizeof(info->source) - 1);
     return FLUX_ERR_NONE;
 }
 
@@ -372,6 +375,7 @@ int flux_db_set_auto_installed(const char *name, int auto_installed) {
     fprintf(f, "version = %s\n", info.version);
     fprintf(f, "install_date = %s\n", info.install_date);
     fprintf(f, "auto_installed = %d\n", info.auto_installed);
+    fprintf(f, "source = %s\n", info.source);
     fclose(f);
     return FLUX_ERR_NONE;
 }
@@ -440,6 +444,10 @@ int flux_autoremove_orphans(int *removed_count) {
         if (removed_this_pass == 0) break;
     }
     return FLUX_ERR_NONE;
+}
+
+int flux_is_kira_pkg(const char *name) {
+    return strncmp(name, "kira-", 5) == 0;
 }
 
 int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen) {

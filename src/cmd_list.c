@@ -35,13 +35,13 @@ int flux_list(int argc, char **argv, const char *usage) {
         if (!show_auto && info.auto_installed) continue;
 
         if (!shown) {
-            if (flux_colors_enabled()) printf("\033[1m%-32s %-12s %s\033[0m\n", "PACKAGE", "VERSION", "");
-            else printf("%-32s %-12s %s\n", "PACKAGE", "VERSION", "");
+            if (flux_colors_enabled()) printf("\033[1m%-32s %-12s %-9s %s\033[0m\n", "PACKAGE", "VERSION", "SOURCE", "");
+            else printf("%-32s %-12s %-9s %s\n", "PACKAGE", "VERSION", "SOURCE", "");
         }
         if (flux_colors_enabled())
-            printf("\033[32m%-32s\033[0m %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "");
+            printf("\033[32m%-32s\033[0m %-12s %-9s %s\n", info.name, info.version, info.source, info.auto_installed ? "auto" : "");
         else
-            printf("%-32s %-12s %s\n", info.name, info.version, info.auto_installed ? "auto" : "");
+            printf("%-32s %-12s %-9s %s\n", info.name, info.version, info.source, info.auto_installed ? "auto" : "");
         shown++;
     }
 

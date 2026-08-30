@@ -9,10 +9,12 @@
 #include "../include/flux.h"
 #include "../include/util.h"
 #include "../include/parser.h"
+#include "../include/alpine.h"
 
 static int g_auto_installed = 0;
 static int g_yes = 0;
 static int g_force = 0;
+static int g_flatpak = 0;
 // set only by install_batch's per-package recursive calls: dependency
 // resolution + the summary table + the confirmation prompt already happened
 // once for the whole batch, so each individual call should skip doing its
@@ -295,12 +297,118 @@ static int collect_files_from_destdir(const char *destdir, char files[][FLUX_MAX
     return FLUX_ERR_NONE;
 }
 
+// walking-skeleton path for a single, dependency-free Alpine package: no
+// recipe exists for these, so there is no cache/build/hook machinery here -
+// just index lookup, download, verify, extract the data member, install
+static int try_alpine_install(const char *pkg, flux_config_t *config) {
+    char arch[ALPINE_MAX_ARCH_LEN];
+    if (alpine_arch_from_target(config->package_target, arch, sizeof(arch)) != FLUX_ERR_NONE) {
+        flux_err("could not determine Alpine architecture from package_target");
+        return FLUX_ERR_GENERAL;
+    }
+
+    const char *repos[] = { "main", "community" };
+    alpine_pkg_t found;
+    memset(&found, 0, sizeof(found));
+    const char *found_repo = NULL;
+
+    for (int i = 0; i < 2 && !found_repo; i++) {
+        char idx_path[512];
+        if (alpine_index_fetch(config, repos[i], arch, idx_path, sizeof(idx_path)) != FLUX_ERR_NONE) continue;
+
+        alpine_index_t index;
+        if (alpine_index_load(idx_path, &index) != FLUX_ERR_NONE) continue;
+
+        alpine_pkg_t *p = alpine_index_find(&index, pkg);
+        if (p) {
+            found = *p;
+            found_repo = repos[i];
+        }
+        alpine_index_free(&index);
+    }
+
+    if (!found_repo) {
+        flux_err("no recipe found for '%s'", pkg);
+        return FLUX_ERR_NOT_FOUND;
+    }
+
+    if (!g_auto_installed)
+        flux_action("Installing %s %s", found.name, found.version);
+    else
+        flux_step("installing dependency: %s %s", found.name, found.version);
+
+    char apk_path[512];
+    flux_step("fetching source...");
+    if (alpine_apk_download(config, found_repo, arch, found.name, found.version, apk_path, sizeof(apk_path)) != FLUX_ERR_NONE) {
+        flux_err("failed to download %s", found.name);
+        return FLUX_ERR_NETWORK;
+    }
+
+    char sig_path[256], control_path[256], data_path[256];
+    if (alpine_apk_split_members(apk_path, sig_path, control_path, data_path, sizeof(sig_path)) != FLUX_ERR_NONE) {
+        flux_err("malformed .apk for %s", found.name);
+        return FLUX_ERR_SOURCE;
+    }
+
+    flux_step("verifying signature...");
+    if (alpine_verify_control(control_path, sig_path, ALPINE_KEYS_DIR) != FLUX_ERR_NONE) {
+        return FLUX_ERR_CACHE;
+    }
+
+    char destdir[256];
+    snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-apk-destdir", found.name);
+    flux_step("extracting...");
+    if (alpine_apk_extract(data_path, destdir) != FLUX_ERR_NONE) {
+        flux_err("failed to extract %s", found.name);
+        return FLUX_ERR_GENERAL;
+    }
+
+    flux_step("installing to system...");
+    if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
+        flux_err("failed to copy files to system");
+        return FLUX_ERR_GENERAL;
+    }
+
+    char (*installed_files)[FLUX_MAX_PATH_LEN] = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
+    const char **file_ptrs = malloc((size_t)FLUX_MAX_INSTALLED_FILES * sizeof(char *));
+    if (!installed_files || !file_ptrs) {
+        free(installed_files);
+        free(file_ptrs);
+        flux_err("out of memory");
+        return FLUX_ERR_GENERAL;
+    }
+    int file_count = 0;
+    collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
+
+    flux_pkg_info_t info;
+    memset(&info, 0, sizeof(info));
+    strncpy(info.name,    found.name,    FLUX_MAX_NAME_LEN - 1);
+    strncpy(info.version, found.version, FLUX_MAX_VERSION_LEN - 1);
+    strncpy(info.source,  "alpine",      sizeof(info.source) - 1);
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
+    info.auto_installed = g_auto_installed;
+    flux_db_register(&info, file_ptrs, file_count);
+    free(installed_files);
+    free(file_ptrs);
+
+    char cleanup[2048];
+    snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"", destdir, apk_path, sig_path, control_path, data_path);
+    system(cleanup);
+
+    flux_ok("%s v%s installed", found.name, found.version);
+    return FLUX_ERR_NONE;
+}
+
 int flux_install(int argc, char **argv, const char *usage) {
     while (argc >= 1 && argv[0][0] == '-') {
         if (strcmp(argv[0], "-y") == 0)
             g_yes = 1;
         else if (strcmp(argv[0], "-f") == 0 || strcmp(argv[0], "--force") == 0)
             g_force = 1;
+        else if (strcmp(argv[0], "--flatpak") == 0)
+            g_flatpak = 1;
         else {
             flux_usage_error(usage);
             return FLUX_ERR_USAGE;
@@ -322,11 +430,14 @@ int flux_install(int argc, char **argv, const char *usage) {
     int err = flux_load_config(&config);
     if (err != FLUX_ERR_NONE) return err;
 
-    struct stat st;
-    if (stat(config.local_repo_path, &st) != 0) {
-        flux_err("recipe repo not found at %s", config.local_repo_path);
-        flux_err("hint: run 'flux update' to download the recipe repo");
-        return FLUX_ERR_GENERAL;
+    // explicit opt-in only, never an automatic fallback - skips kotodama/Alpine resolution entirely
+    if (g_flatpak) {
+        int fp_err = try_flatpak_fallback(pkg);
+        if (fp_err == FLUX_ERR_NOT_FOUND) {
+            flux_err("no match on Flathub for '%s'", pkg);
+            return FLUX_ERR_NOT_FOUND;
+        }
+        return fp_err;
     }
 
     // more than one package name on a top-level call (not one of install_batch's
@@ -335,12 +446,22 @@ int flux_install(int argc, char **argv, const char *usage) {
     if (argc > 1 && !g_skip_deps)
         return install_batch(argc, argv, usage, &config);
 
+    // name alone decides the source: kira-* is always kotodama, everything
+    // else is always resolved against Alpine - no recipe-existence probing
+    if (!flux_is_kira_pkg(pkg))
+        return try_alpine_install(pkg, &config);
+
+    struct stat st;
+    if (stat(config.local_repo_path, &st) != 0) {
+        flux_err("recipe repo not found at %s", config.local_repo_path);
+        flux_err("hint: run 'flux update' to download the recipe repo");
+        return FLUX_ERR_GENERAL;
+    }
+
     // parse recipe
     char koto_path[FLUX_MAX_PATH_LEN * 2];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config.local_repo_path, pkg);
     if (stat(koto_path, &st) != 0) {
-        int fp_err = try_flatpak_fallback(pkg);
-        if (fp_err != FLUX_ERR_NOT_FOUND) return fp_err;
         flux_err("no recipe found for '%s'", pkg);
         return FLUX_ERR_NOT_FOUND;
     }
@@ -504,6 +625,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         memset(&info, 0, sizeof(info));
         strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
         strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
+    strncpy(info.source,  "kotodama",      sizeof(info.source) - 1);
         time_t now = time(NULL);
         struct tm *t = localtime(&now);
         strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
@@ -535,6 +657,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         memset(&info, 0, sizeof(info));
         strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
         strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
+    strncpy(info.source,  "kotodama",      sizeof(info.source) - 1);
         time_t now_m = time(NULL);
         struct tm *t_m = localtime(&now_m);
         strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t_m);
@@ -691,6 +814,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     memset(&info, 0, sizeof(info));
     strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
     strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
+    strncpy(info.source,  "kotodama",      sizeof(info.source) - 1);
     strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
     info.auto_installed = g_auto_installed;
     flux_db_register(&info, file_ptrs, file_count);

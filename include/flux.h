@@ -91,6 +91,8 @@ typedef struct {
     char version[FLUX_MAX_VERSION_LEN];
     char install_date[32];
     int  auto_installed; // 1 = pulled in as dep, 0 = explicitly installed
+    // "kotodama" or "alpine"; empty on-disk means a pre-v2 entry, treated as kotodama everywhere it's displayed
+    char source[16];
 } flux_pkg_info_t;
 
 typedef struct {

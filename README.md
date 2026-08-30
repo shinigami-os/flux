@@ -21,7 +21,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 
 | Command | Action |
 |---|---|
-| `flux install <pkg>` | Install a package (from cache or compile from source). If no recipe exists, offers to install a matching app from Flathub instead |
+| `flux install [--flatpak] <pkg>` | Install a package: a `kira-`-prefixed name is built from a kotodama recipe, anything else is resolved against Alpine's package index. `--flatpak` installs via Flathub instead, skipping both |
 | `flux remove [-a] <pkg>` | Remove a package and all its installed files. `-a`/`--autoremove` also removes now-orphaned auto-installed deps |
 | `flux autoremove` | Remove every installed package that's auto-installed and no longer needed by anything |
 | `flux update [-i]` | Sync the local recipe repo, report which installed packages have a newer recipe version, and check for a newer flux or kira-base release. `-i` installs the reported updates. |
@@ -36,6 +36,15 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux kernel-update [-f]` | Download, verify, extract, and boot-configure the latest Shinigami kernel release |
 
 ---
+
+## Package sources
+
+flux resolves every package name against one of two sources, decided purely by the name itself:
+
+- **`kira-*`** - always a kotodama recipe, built from source. This is Kira's own software: the distro's meta-packages, desktop environments, and anything genuinely unavailable elsewhere (vendored and renamed to fit the prefix, e.g. the Sleex DE ships as `kira-sleex`).
+- **everything else** - always resolved live against [Alpine Linux's package index](https://pkgs.alpinelinux.org/packages) (APKINDEX + `.apk`), natively parsed and verified by flux itself. No separate `apk` binary is ever shelled out to, and no local recipe is required.
+
+There is no fallback between the two - a missing `kira-*` recipe is just a "package not found" error. `flux install --flatpak <pkg>` installs via Flathub explicitly, bypassing both.
 
 ## kotodama recipe format
 
@@ -127,7 +136,7 @@ alpine_branch = edge
 ## Package database
 
 Installed packages are tracked in `/var/lib/flux/installed/<pkg>/`:
-- `info`: name, version, install date, auto/manual flag
+- `info`: name, version, install date, auto/manual flag, source (`kotodama` or `alpine`)
 - `files`: one absolute system path per line (empty for meta-packages)
 
 `flux remove` reads the files list and deletes every installed file precisely. No orphaned files.

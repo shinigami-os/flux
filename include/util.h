@@ -20,6 +20,9 @@ int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count)
 int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const flux_config_t *config);
 int flux_autoremove_orphans(int *removed_count);
 
+// true if name is routed to kotodama (Kira's own software); false routes to Alpine
+int flux_is_kira_pkg(const char *name);
+
 int flux_native_target(char *out, size_t outlen);
 int flux_is_archive_name(const char *name);
 int flux_extract_source(const char *fetched_path, const char *dest);
