@@ -8,7 +8,7 @@
 #include "../include/alpine.h"
 #include "../include/util.h"
 
-int alpine_verify_control(const char *control_tar_gz_path, const char *sig_tar_gz_path, const char *keys_dir) {
+int alpine_verify_signature(const char *data_tar_gz_path, const char *sig_tar_gz_path, const char *keys_dir) {
     const char *sig_extract_dir = "/tmp/flux-build/apk-sig-extract";
     char cmd[700];
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xzf \"%s\" -C \"%s\" 2>/dev/null",
@@ -29,7 +29,12 @@ int alpine_verify_control(const char *control_tar_gz_path, const char *sig_tar_g
     closedir(d);
 
     if (sig_filename[0] == '\0') {
-        flux_err(".apk signature member has no .SIGN.RSA.* entry");
+        flux_err("signature member has no .SIGN.RSA.* entry");
+        return FLUX_ERR_CACHE;
+    }
+    // untrusted (an attacker-controlled archive entry name) until this check passes - never build a shell command from it before validating
+    if (!alpine_name_is_safe(sig_filename)) {
+        flux_err("signature filename has unsafe characters, refusing");
         return FLUX_ERR_CACHE;
     }
 
@@ -47,7 +52,7 @@ int alpine_verify_control(const char *control_tar_gz_path, const char *sig_tar_g
 
     char verify_cmd[2048];
     snprintf(verify_cmd, sizeof(verify_cmd), "openssl dgst -sha1 -verify \"%s\" -signature \"%s\" \"%s\" >/dev/null 2>&1",
-             key_path, sig_path, control_tar_gz_path);
+             key_path, sig_path, data_tar_gz_path);
     int ok = (system(verify_cmd) == 0);
 
     char rmcmd[300];

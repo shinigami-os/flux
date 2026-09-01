@@ -35,10 +35,7 @@ const alpine_pkg_t *alpine_repos_find_by_name(const alpine_repos_t *repos, const
     return NULL;
 }
 
-// strips a trailing version operator/constraint from a dep/provides token,
-// e.g. "libcurl=8.21.0-r0" -> "libcurl", "musl>=1.2.5-r0" -> "musl" - the
-// resolver is greedy/unversioned (see the scope doc), it only needs the
-// bare capability/package name to look up a provider
+// strips a trailing version constraint, e.g. "musl>=1.2.5-r0" -> "musl" - the resolver is greedy/unversioned
 static void strip_constraint(const char *token, char *out, size_t outlen) {
     size_t i = 0;
     while (token[i] && token[i] != '=' && token[i] != '<' && token[i] != '>' && token[i] != '~' && i < outlen - 1) {

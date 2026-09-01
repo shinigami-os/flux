@@ -194,10 +194,7 @@ static int report_and_collect_updates(const flux_config_t *config, const char *o
     return FLUX_ERR_NONE;
 }
 
-// musl-ABI policy: Kira builds its own musl, Alpine tracks its own, but
-// packages depend on it via the SONAME so:libc.musl-<arch>.so.1, which musl
-// never bumps - so the existing so:-resolution path (alpine_resolve.c)
-// already satisfies it with no version pinning, as long as this exists
+// musl's SONAME never bumps, so so:-resolution (alpine_resolve.c) needs no version pinning as long as this exists
 static void check_musl_soname(const flux_config_t *config) {
     char arch[ALPINE_MAX_ARCH_LEN];
     if (alpine_arch_from_target(config->package_target, arch, sizeof(arch)) != FLUX_ERR_NONE) return;

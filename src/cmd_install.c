@@ -22,8 +22,11 @@ static int g_flatpak = 0;
 // whether THIS package was a root request or a pulled-in dep (DB bookkeeping
 // for `flux autoremove`, and the "Installing" vs "installing dependency" header)
 static int g_skip_deps = 0;
+// set right before installing a resolved queue, so try_alpine_install() reuses the index that walk already loaded instead of refetching it per package
+static alpine_repos_t *g_active_repos = NULL;
 
 static int install_batch(int argc, char **argv, const char *usage, flux_config_t *config);
+int flux_install(int argc, char **argv, const char *usage);
 
 // returns FLUX_ERR_NOT_FOUND if flatpak is unusable or nothing matched, so the caller falls through to its own "no recipe found" error
 static int try_flatpak_fallback(const char *pkg) {
@@ -175,10 +178,7 @@ static int queue_contains(flux_install_queue_t *q, const char *name) {
     return 0;
 }
 
-// bundles the state a mixed kotodama+Alpine dependency walk needs beyond
-// just the config: the Alpine index (fetched at most once per walk, not
-// once per dependency) and the set of names ruled out by a "!pkg" conflict
-// token encountered anywhere in the tree so far
+// config + a lazily-loaded Alpine index (shared for one whole dependency walk) + names ruled out by a "!pkg" conflict
 typedef struct {
     flux_config_t *config;
     alpine_repos_t repos;
@@ -361,9 +361,7 @@ static int collect_files_from_destdir(const char *destdir, char files[][FLUX_MAX
     return FLUX_ERR_NONE;
 }
 
-// walking-skeleton path for a single, dependency-free Alpine package: no
-// recipe exists for these, so there is no cache/build/hook machinery here -
-// just index lookup, download, verify, extract the data member, install
+// installs one resolved Alpine package name: no kotodama recipe, so no cache/build/hook machinery
 static int try_alpine_install(const char *pkg, flux_config_t *config) {
     char arch[ALPINE_MAX_ARCH_LEN];
     if (alpine_arch_from_target(config->package_target, arch, sizeof(arch)) != FLUX_ERR_NONE) {
@@ -371,29 +369,48 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         return FLUX_ERR_GENERAL;
     }
 
-    const char *repos[] = { "main", "community" };
-    alpine_pkg_t found;
-    memset(&found, 0, sizeof(found));
-    const char *found_repo = NULL;
-
-    for (int i = 0; i < 2 && !found_repo; i++) {
-        char idx_path[512];
-        if (alpine_index_fetch(config, repos[i], arch, idx_path, sizeof(idx_path)) != FLUX_ERR_NONE) continue;
-
-        alpine_index_t index;
-        if (alpine_index_load(idx_path, &index) != FLUX_ERR_NONE) continue;
-
-        alpine_pkg_t *p = alpine_index_find(&index, pkg);
-        if (p) {
-            found = *p;
-            found_repo = repos[i];
+    alpine_repos_t local_repos;
+    int own_repos = 0;
+    alpine_repos_t *repos = g_active_repos;
+    if (!repos) {
+        if (alpine_repos_load(config, arch, &local_repos) != FLUX_ERR_NONE) {
+            flux_err("failed to load Alpine package index");
+            return FLUX_ERR_NETWORK;
         }
-        alpine_index_free(&index);
+        repos = &local_repos;
+        own_repos = 1;
     }
 
-    if (!found_repo) {
+    const char *found_repo = NULL;
+    const alpine_pkg_t *p = alpine_repos_find_by_name(repos, pkg, &found_repo);
+    alpine_pkg_t found;
+    memset(&found, 0, sizeof(found));
+    if (p) {
+        found = *p;
+        // repos may be freed below; these point into its raw_text and are never needed past this line
+        found.depends_raw = NULL;
+        found.provides_raw = NULL;
+    }
+    if (own_repos) alpine_repos_free(repos);
+    if (!p) {
         flux_err("no recipe found for '%s'", pkg);
         return FLUX_ERR_NOT_FOUND;
+    }
+
+    // defense in depth: alpine_index_load() already rejects unsafe name/version at parse time, this
+    // guards the value actually being used to build shell commands below regardless of where it came from
+    if (!alpine_name_is_safe(found.name) || !alpine_name_is_safe(found.version)) {
+        flux_err("'%s' has unsafe characters in its Alpine name/version, refusing", pkg);
+        return FLUX_ERR_SOURCE;
+    }
+
+    if (flux_db_is_installed(found.name) && !g_force) {
+        flux_pkg_info_t info;
+        if (flux_db_read_info(found.name, &info) == FLUX_ERR_NONE && strcmp(info.version, found.version) == 0) {
+            if (!g_auto_installed) flux_db_set_auto_installed(found.name, 0);
+            flux_ok("%s is already installed", found.name);
+            return FLUX_ERR_NONE;
+        }
     }
 
     if (!g_auto_installed)
@@ -415,7 +432,7 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     }
 
     flux_step("verifying signature...");
-    if (alpine_verify_control(control_path, sig_path, ALPINE_KEYS_DIR) != FLUX_ERR_NONE) {
+    if (alpine_verify_signature(control_path, sig_path, ALPINE_KEYS_DIR) != FLUX_ERR_NONE) {
         return FLUX_ERR_CACHE;
     }
 
@@ -426,9 +443,42 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         return FLUX_ERR_GENERAL;
     }
 
-    // third-party scripts, unlike kotodama's %post-install (Kira-authored,
-    // runs silently) - surface them and get explicit consent before running
-    // anything as root, rather than trusting Alpine's signature chain alone
+    char destdir[256];
+    snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-apk-destdir", found.name);
+    flux_step("extracting...");
+    if (alpine_apk_extract(data_path, destdir) != FLUX_ERR_NONE) {
+        flux_err("failed to extract %s", found.name);
+        return FLUX_ERR_GENERAL;
+    }
+
+    char (*installed_files)[FLUX_MAX_PATH_LEN] = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
+    const char **file_ptrs = malloc((size_t)FLUX_MAX_INSTALLED_FILES * sizeof(char *));
+    if (!installed_files || !file_ptrs) {
+        free(installed_files);
+        free(file_ptrs);
+        flux_err("out of memory");
+        return FLUX_ERR_GENERAL;
+    }
+    int file_count = 0;
+    if (collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count) != FLUX_ERR_NONE) {
+        flux_err("failed to list %s's files", found.name);
+        free(installed_files);
+        free(file_ptrs);
+        return FLUX_ERR_GENERAL;
+    }
+
+    // checked, and any trigger scripts surfaced, BEFORE anything touches the real root
+    char conflict_owner[FLUX_MAX_NAME_LEN], conflict_path[FLUX_MAX_PATH_LEN];
+    if (flux_check_file_conflicts(found.name, file_ptrs, file_count,
+                                   conflict_owner, sizeof(conflict_owner),
+                                   conflict_path, sizeof(conflict_path)) != FLUX_ERR_NONE) {
+        flux_err("'%s' conflicts with already-installed '%s' over %s", found.name, conflict_owner, conflict_path);
+        free(installed_files);
+        free(file_ptrs);
+        return FLUX_ERR_GENERAL;
+    }
+
+    // third-party scripts, unlike kotodama's %post-install (Kira-authored, runs silently) - get explicit consent first
     int triggers_approved = 0;
     char trigger_bodies[ALPINE_TRIGGER_COUNT][FLUX_MAX_HOOK_LEN];
     memset(trigger_bodies, 0, sizeof(trigger_bodies));
@@ -454,6 +504,8 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
 
         if (!triggers_approved) {
             flux_err("declined to run %s's install scripts, aborting install", found.name);
+            free(installed_files);
+            free(file_ptrs);
             return FLUX_ERR_GENERAL;
         }
 
@@ -461,40 +513,11 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
             flux_step("running .pre-install...");
             if (alpine_run_trigger_script(trigger_bodies[0]) != 0) {
                 flux_err(".pre-install failed for %s", found.name);
+                free(installed_files);
+                free(file_ptrs);
                 return FLUX_ERR_BUILD;
             }
         }
-    }
-
-    char destdir[256];
-    snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-apk-destdir", found.name);
-    flux_step("extracting...");
-    if (alpine_apk_extract(data_path, destdir) != FLUX_ERR_NONE) {
-        flux_err("failed to extract %s", found.name);
-        return FLUX_ERR_GENERAL;
-    }
-
-    char (*installed_files)[FLUX_MAX_PATH_LEN] = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
-    const char **file_ptrs = malloc((size_t)FLUX_MAX_INSTALLED_FILES * sizeof(char *));
-    if (!installed_files || !file_ptrs) {
-        free(installed_files);
-        free(file_ptrs);
-        flux_err("out of memory");
-        return FLUX_ERR_GENERAL;
-    }
-    int file_count = 0;
-    collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
-
-    // checked BEFORE anything touches the real root - refuse rather than
-    // silently overwrite a file another installed package already owns
-    char conflict_owner[FLUX_MAX_NAME_LEN], conflict_path[FLUX_MAX_PATH_LEN];
-    if (flux_check_file_conflicts(found.name, file_ptrs, file_count,
-                                   conflict_owner, sizeof(conflict_owner),
-                                   conflict_path, sizeof(conflict_path)) != FLUX_ERR_NONE) {
-        flux_err("'%s' conflicts with already-installed '%s' over %s", found.name, conflict_owner, conflict_path);
-        free(installed_files);
-        free(file_ptrs);
-        return FLUX_ERR_GENERAL;
     }
 
     flux_step("installing to system...");
@@ -536,6 +559,71 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
 
     flux_ok("%s v%s installed", found.name, found.version);
     return FLUX_ERR_NONE;
+}
+
+static void build_queue_row(const flux_config_t *config, const flux_queue_entry_t *entry, flux_table_row_t *row) {
+    strncpy(row->col1, entry->name, FLUX_MAX_NAME_LEN - 1);
+    if (entry->source == 'A') {
+        strncpy(row->col2, "alpine", FLUX_MAX_VERSION_LEN - 1);
+        return;
+    }
+    char kp[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, entry->name);
+    flux_recipe_t r;
+    memset(&r, 0, sizeof(r));
+    parse_kotodama(&r, kp);
+    strncpy(row->col2, r.version, FLUX_MAX_VERSION_LEN - 1);
+}
+
+// prints the resolved queue and asks to proceed; 1 = proceed (including -y), 0 = user declined
+static int confirm_queue(const flux_config_t *config, flux_install_queue_t *queue) {
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    for (int i = 0; i < queue->count; i++)
+        build_queue_row(config, &queue->pkgs[i], &rows[i]);
+
+    char title[64];
+    snprintf(title, sizeof(title), "%d package%s will be installed", queue->count, queue->count == 1 ? "" : "s");
+    printf("\n");
+    flux_print_table(title, rows, queue->count);
+    printf("\nProceed? [Y/n] ");
+    fflush(stdout);
+
+    if (g_yes) {
+        printf("Y\n");
+        return 1;
+    }
+    char answer[8] = {0};
+    if (fgets(answer, sizeof(answer), stdin) && (answer[0] == 'n' || answer[0] == 'N')) {
+        printf("Aborted.\n");
+        return 0;
+    }
+    return 1;
+}
+
+// installs a resolved queue in order, recursing per entry so each re-routes through the kira-*/Alpine check
+static int install_resolved_queue(flux_install_queue_t *queue, alpine_repos_t *repos) {
+    int saved_force = g_force;
+    g_force = 0; // deps are never force-reinstalled, only the root package is
+    g_active_repos = repos;
+    int overall_err = FLUX_ERR_NONE;
+
+    for (int i = 0; i < queue->count; i++) {
+        g_auto_installed = (i < queue->count - 1) ? 1 : 0;
+        g_skip_deps = 1;
+        char *one_argv[] = { queue->pkgs[i].name };
+        int err = flux_install(1, one_argv, "flux install <pkg>");
+        g_skip_deps = 0;
+        if (err != FLUX_ERR_NONE) {
+            flux_err("failed to install '%s'", queue->pkgs[i].name);
+            overall_err = (i == queue->count - 1) ? err : FLUX_ERR_DEPENDENCY;
+            break;
+        }
+    }
+
+    g_auto_installed = 0;
+    g_active_repos = NULL;
+    g_force = saved_force;
+    return overall_err;
 }
 
 int flux_install(int argc, char **argv, const char *usage) {
@@ -585,8 +673,34 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     // name alone decides the source: kira-* is always kotodama, everything
     // else is always resolved against Alpine - no recipe-existence probing
-    if (!flux_is_kira_pkg(pkg))
-        return try_alpine_install(pkg, &config);
+    if (!flux_is_kira_pkg(pkg)) {
+        // one of install_resolved_queue's own recursive calls - deps already resolved, just install this entry
+        if (g_skip_deps)
+            return try_alpine_install(pkg, &config);
+
+        // a plain Alpine name has its own deps too, so it gets the same resolve-then-install-queue treatment as a kira-* root below
+        flux_install_queue_t queue;
+        memset(&queue, 0, sizeof(queue));
+        char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+        memset(visited, 0, sizeof(visited));
+        int visited_count = 0;
+
+        collect_ctx_t ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.config = &config;
+
+        int err2 = collect_deps(pkg, &ctx, &queue, visited, &visited_count);
+        if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
+
+        if (queue.count > 1 && !confirm_queue(&config, &queue)) {
+            alpine_repos_free(&ctx.repos);
+            return FLUX_ERR_NONE;
+        }
+
+        int result = install_resolved_queue(&queue, &ctx.repos);
+        alpine_repos_free(&ctx.repos);
+        return result;
+    }
 
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
@@ -684,45 +798,16 @@ int flux_install(int argc, char **argv, const char *usage) {
         int err2 = collect_deps(pkg, &ctx, &queue, visited, &visited_count);
         if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
 
-        if (queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0].name, pkg) != 0)) {
-            flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
-            for (int i = 0; i < queue.count; i++) {
-                strncpy(rows[i].col1, queue.pkgs[i].name, FLUX_MAX_NAME_LEN - 1);
-                if (queue.pkgs[i].source == 'A') {
-                    strncpy(rows[i].col2, "alpine", FLUX_MAX_VERSION_LEN - 1);
-                } else {
-                    char kp[FLUX_MAX_PATH_LEN * 2 + 16];
-                    snprintf(kp, sizeof(kp), "%s/%s/kotodama", config.local_repo_path, queue.pkgs[i].name);
-                    flux_recipe_t r;
-                    memset(&r, 0, sizeof(r));
-                    parse_kotodama(&r, kp);
-                    strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
-                }
-            }
-            char title[64];
-            snprintf(title, sizeof(title), "%d package%s will be installed",
-                     queue.count, queue.count == 1 ? "" : "s");
-            printf("\n");
-            flux_print_table(title, rows, queue.count);
-            printf("\nProceed? [Y/n] ");
-            fflush(stdout);
-            if (g_yes) {
-                printf("Y\n");
-            } else {
-                char answer[8] = {0};
-                if (fgets(answer, sizeof(answer), stdin)) {
-                    if (answer[0] == 'n' || answer[0] == 'N') {
-                        printf("Aborted.\n");
-                        return FLUX_ERR_NONE;
-                    }
-                }
-            }
-            printf("\n");
+        if ((queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0].name, pkg) != 0))
+            && !confirm_queue(&config, &queue)) {
+            alpine_repos_free(&ctx.repos);
+            return FLUX_ERR_NONE;
         }
 
         int saved_force = g_force;
         g_force = 0;          /* deps are never force-reinstalled, only the root package is */
         g_auto_installed = 1;
+        g_active_repos = &ctx.repos;
         for (int i = 0; i < queue.count - 1; i++) {
             // this queue is already the fully-resolved transitive closure,
             // cycles included (e.g. elogind <-> polkit) - re-resolving from
@@ -737,12 +822,14 @@ int flux_install(int argc, char **argv, const char *usage) {
             if (dep_err != FLUX_ERR_NONE) {
                 flux_err("failed to install dependency '%s'", queue.pkgs[i].name);
                 g_auto_installed = 0;
+                g_active_repos = NULL;
                 g_force = saved_force;
                 alpine_repos_free(&ctx.repos);
                 return FLUX_ERR_DEPENDENCY;
             }
         }
         g_auto_installed = 0;
+        g_active_repos = NULL;
         g_force = saved_force;
         alpine_repos_free(&ctx.repos);
     }
@@ -1063,6 +1150,7 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         if (fgets(answer, sizeof(answer), stdin)) {
             if (answer[0] == 'n' || answer[0] == 'N') {
                 printf("Aborted.\n");
+                alpine_repos_free(&ctx.repos);
                 return FLUX_ERR_NONE;
             }
         }
@@ -1112,12 +1200,14 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         system("mkdir -p /tmp/flux-build");
         if (flux_download_batch(downloads, download_count) != FLUX_ERR_NONE) {
             flux_err("failed to download sources");
+            alpine_repos_free(&ctx.repos);
             return FLUX_ERR_NETWORK;
         }
     }
 
     int saved_force = g_force;
     int overall_err = FLUX_ERR_NONE;
+    g_active_repos = &ctx.repos;
     for (int i = 0; i < queue.count; i++) {
         int is_root = 0;
         for (int j = 0; j < argc; j++) {
@@ -1136,6 +1226,7 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         }
     }
     g_auto_installed = 0;
+    g_active_repos = NULL;
     g_force = saved_force;
     alpine_repos_free(&ctx.repos);
     return overall_err;

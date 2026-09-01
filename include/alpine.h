@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 #define ALPINE_MAX_NAME_LEN       64
-#define ALPINE_MAX_VERSION_LEN    48   // Alpine versions carry -rN suffixes, e.g. "1.2.3-r10"
+#define ALPINE_MAX_VERSION_LEN    48
 #define ALPINE_MAX_DESC_LEN       256
 #define ALPINE_MAX_URL_LEN        256
 #define ALPINE_MAX_LICENSE_LEN    64
@@ -13,21 +13,14 @@
 #define ALPINE_MAX_ORIGIN_LEN     64
 #define ALPINE_MAX_CHECKSUM_LEN   96
 #define ALPINE_MAX_DEP_TOKEN_LEN  96
-// per-call cap when tokenizing one package's D:/p: line at resolve time -
-// real edge index has outliers up to ~110 deps / ~255 provides on a few
-// split packages, so this is sized well above that, not the common case
+// sized for real outliers (some split packages carry 100+ deps/provides), not the common case
 #define ALPINE_MAX_TOKENS_PER_LINE 320
 
 typedef struct {
     char token[ALPINE_MAX_DEP_TOKEN_LEN];
 } alpine_dep_t;
 
-// one parsed APKINDEX stanza. depends_raw/provides_raw point into the
-// owning alpine_index_t's raw_text instead of being copied - across the
-// full ~24000-package edge index, storing every D:/p: line as its own
-// fixed-size token array would run into the hundreds of MB for outlier
-// packages alone. alpine_parse_dep_line() tokenizes on demand, only for
-// the one package actually being resolved.
+// depends_raw/provides_raw point into the owning alpine_index_t's raw_text, not copied - see alpine_parse_dep_line
 typedef struct {
     char name[ALPINE_MAX_NAME_LEN];
     char version[ALPINE_MAX_VERSION_LEN];
@@ -54,23 +47,25 @@ typedef struct {
 int alpine_arch_from_target(const char *package_target, char *out, size_t outlen);
 int alpine_index_url(const flux_config_t *config, const char *repo, const char *arch, char *out, size_t outlen);
 int alpine_index_fetch(const flux_config_t *config, const char *repo, const char *arch, char *path_out, size_t path_outlen);
+// fetches+verifies the signed index, then parses it - see alpine_verify_signature
 int alpine_index_load(const char *tar_gz_path, alpine_index_t *index);
 void alpine_index_free(alpine_index_t *index);
 alpine_pkg_t *alpine_index_find(alpine_index_t *index, const char *name);
 int alpine_parse_dep_line(const char *raw, alpine_dep_t *out, int max, int *count);
+// true if every char in s is safe to embed in a shell command string (name/version/key-filename validation)
+int alpine_name_is_safe(const char *s);
 
-// a .apk is 3 concatenated, independently-valid gzip streams: signature,
-// control (.PKGINFO + any pre/post-install scripts), data (the real files).
-// downloaded once, then split into 3 separate files so the control member
-// can be checked/verified without ever touching the (potentially huge) data
-// member, and so only the data member's files land in a package's destdir.
+// both .apk and APKINDEX.tar.gz are concatenated independently-valid gzip streams (signature + payload)
+int alpine_gzip_find_members(const char *path, long *offsets, int max_offsets, int *count);
+int alpine_gzip_extract_range(const char *path, long start, long len, const char *out_path);
+
 int alpine_apk_url(const flux_config_t *config, const char *repo, const char *arch, const char *name, const char *version, char *out, size_t outlen);
 int alpine_apk_download(const flux_config_t *config, const char *repo, const char *arch, const char *name, const char *version, char *path_out, size_t path_outlen);
+// splits a .apk into its 3 members: signature, control (.PKGINFO + scripts), data (installable files)
 int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *control_path_out, char *data_path_out, size_t path_outlen);
 int alpine_apk_extract(const char *member_tar_gz_path, const char *destdir);
 
-// main + community held together for the lifetime of one dependency walk,
-// so resolving N dependencies doesn't refetch/reparse the index N times
+// main + community held for one dependency walk's lifetime, so N dependencies don't refetch/reparse the index N times
 typedef struct {
     alpine_index_t main;
     alpine_index_t community;
@@ -83,37 +78,22 @@ const alpine_pkg_t *alpine_repos_find_provider(const alpine_repos_t *repos, cons
 
 #define ALPINE_MAX_RESOLVED_DEPS 128
 
-// resolves one Alpine package's raw D: tokens into concrete package names:
-// so:/cmd:/pc: virtual capabilities and plain name+version-constraint tokens
-// are all resolved down to whichever real package provides them (greedy,
-// first match, no backtracking - see the scope doc). "!pkg" conflict tokens
-// are returned separately rather than treated as dependencies to install
+// resolves one package's D: tokens to concrete package names (so:/cmd:/pc: capabilities included); "!pkg" conflict tokens go to conflicts_out instead
 int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
                          char names_out[][ALPINE_MAX_NAME_LEN], int max_names, int *names_count,
                          char conflicts_out[][ALPINE_MAX_NAME_LEN], int max_conflicts, int *conflicts_count);
 
 #define ALPINE_KEYS_DIR "/etc/flux/alpine-keys"
 
-// Alpine's control member (already extracted by alpine_apk_extract) can
-// carry .pre-install/.post-install/.trigger scripts alongside .PKGINFO -
-// unlike kotodama's %post-install (Kira-authored), this content is
-// third-party and runs against the real root, so it needs to be surfaced
-// to the user before running, not executed silently
 #define ALPINE_TRIGGER_COUNT 3
 // ".pre-install"/".post-install"/".trigger", in run order, for index in [0, ALPINE_TRIGGER_COUNT)
 const char *alpine_trigger_script_name(int index);
 int alpine_has_triggers(const char *control_extract_dir);
-// reads the named script's body (".pre-install"/".post-install"/".trigger")
-// from control_extract_dir; returns FLUX_ERR_NONE with body[0] == '\0' if
-// that script doesn't exist for this package
+// FLUX_ERR_NONE with body[0] == '\0' if that script doesn't exist for this package
 int alpine_read_trigger_script(const char *control_extract_dir, const char *script_name, char *body, size_t body_len);
-// runs an already-read trigger script body via flux_run_script()
 int alpine_run_trigger_script(const char *body);
 
-// verifies the control member's compressed bytes against the detached RSA
-// signature carried in the sig member, against a vendored trusted key in
-// keys_dir - matches Alpine's own abuild-sign scheme (sha1 digest, RSA
-// PKCS1v15, over the control member's raw compressed bytes, not decompressed)
-int alpine_verify_control(const char *control_tar_gz_path, const char *sig_tar_gz_path, const char *keys_dir);
+// verifies data_tar_gz_path's compressed bytes against the detached RSA signature in sig_tar_gz_path, using a trusted key from keys_dir - matches Alpine's abuild-sign scheme (sha1/PKCS1v15), used for both .apk control members and APKINDEX.tar.gz
+int alpine_verify_signature(const char *data_tar_gz_path, const char *sig_tar_gz_path, const char *keys_dir);
 
 #endif

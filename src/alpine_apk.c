@@ -21,18 +21,12 @@ int alpine_apk_download(const flux_config_t *config, const char *repo, const cha
     return flux_download(url, path_out);
 }
 
-// gzip -t only accepts a byte range covering an exact whole number of
-// complete members, with nothing partial trailing - it is NOT true that
-// "valid at N implies valid at every N' > N up to the next boundary", so a
-// monotonic-predicate binary search doesn't work here. Real member starts
-// are found by scanning for gzip's magic bytes (1f 8b 08) and confirming
-// each candidate with an exact-range gzip -t, which also filters out any
-// coincidental magic-byte match inside a member's own compressed data.
-static int find_member_offsets(const char *apk_path, long *offsets, int max_offsets, int *count) {
+// gzip -t needs an exact whole-member byte range (not monotonic in N), so member starts are found via magic-byte scan + exact-range gzip -t
+int alpine_gzip_find_members(const char *path, long *offsets, int max_offsets, int *count) {
     *count = 0;
 
     char cmd[512];
-    snprintf(cmd, sizeof(cmd), "grep -abo $'\\x1f\\x8b\\x08' \"%s\"", apk_path);
+    snprintf(cmd, sizeof(cmd), "grep -abo $'\\x1f\\x8b\\x08' \"%s\"", path);
     FILE *f = popen(cmd, "r");
     if (!f) return FLUX_ERR_GENERAL;
 
@@ -53,10 +47,16 @@ static int find_member_offsets(const char *apk_path, long *offsets, int max_offs
         long start = offsets[*count - 1];
         long len = candidates[i] - start;
         char testcmd[600];
-        snprintf(testcmd, sizeof(testcmd), "tail -c +%ld \"%s\" | head -c %ld | gzip -t 2>/dev/null", start + 1, apk_path, len);
+        snprintf(testcmd, sizeof(testcmd), "tail -c +%ld \"%s\" | head -c %ld | gzip -t 2>/dev/null", start + 1, path, len);
         if (system(testcmd) == 0) offsets[(*count)++] = candidates[i];
     }
     return FLUX_ERR_NONE;
+}
+
+int alpine_gzip_extract_range(const char *path, long start, long len, const char *out_path) {
+    char cmd[700];
+    snprintf(cmd, sizeof(cmd), "tail -c +%ld \"%s\" | head -c %ld > \"%s\"", start + 1, path, len, out_path);
+    return system(cmd) == 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
 }
 
 int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *control_path_out, char *data_path_out, size_t path_outlen) {
@@ -65,7 +65,7 @@ int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *con
 
     long offsets[8];
     int count = 0;
-    if (find_member_offsets(apk_path, offsets, 8, &count) != FLUX_ERR_NONE) return FLUX_ERR_SOURCE;
+    if (alpine_gzip_find_members(apk_path, offsets, 8, &count) != FLUX_ERR_NONE) return FLUX_ERR_SOURCE;
     if (count != 3) {
         flux_err(".apk does not have the expected 3 gzip members (found %d)", count);
         return FLUX_ERR_SOURCE;
@@ -75,12 +75,11 @@ int alpine_apk_split_members(const char *apk_path, char *sig_path_out, char *con
     char *out_paths[3] = { sig_path_out, control_path_out, data_path_out };
     const char *suffixes[3] = { "sig", "control", "data" };
 
+    system("mkdir -p /tmp/flux-build");
     for (int i = 0; i < 3; i++) {
         snprintf(out_paths[i], path_outlen, "/tmp/flux-build/apk-%s.tar.gz", suffixes[i]);
-        long start = bounds[i], len = bounds[i + 1] - bounds[i];
-        char cmd[700];
-        snprintf(cmd, sizeof(cmd), "tail -c +%ld \"%s\" | head -c %ld > \"%s\"", start + 1, apk_path, len, out_paths[i]);
-        if (system(cmd) != 0) return FLUX_ERR_GENERAL;
+        if (alpine_gzip_extract_range(apk_path, bounds[i], bounds[i + 1] - bounds[i], out_paths[i]) != FLUX_ERR_NONE)
+            return FLUX_ERR_GENERAL;
     }
     return FLUX_ERR_NONE;
 }

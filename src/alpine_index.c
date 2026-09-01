@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,15 @@ int alpine_arch_from_target(const char *package_target, char *out, size_t outlen
     memcpy(out, package_target, len);
     out[len] = '\0';
     return out[0] ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
+}
+
+int alpine_name_is_safe(const char *s) {
+    if (!s || !*s) return 0;
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (!(isalnum(c) || c == '.' || c == '_' || c == '+' || c == '-' || c == ':' || c == '@')) return 0;
+    }
+    return 1;
 }
 
 int alpine_index_url(const flux_config_t *config, const char *repo, const char *arch, char *out, size_t outlen) {
@@ -32,16 +42,49 @@ int alpine_index_fetch(const flux_config_t *config, const char *repo, const char
     return flux_download(url, path_out);
 }
 
-int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
-    memset(index, 0, sizeof(*index));
+// signed like a .apk control member: 2 gzip members (signature, index tarball) - refusing an unverified index also blocks a malicious mirror steering name/version resolution into shell input
+static int verify_and_extract_index(const char *tar_gz_path, char *out_index_path) {
+    long offsets[4];
+    int member_count = 0;
+    if (alpine_gzip_find_members(tar_gz_path, offsets, 4, &member_count) != FLUX_ERR_NONE || member_count != 2) {
+        flux_err("APKINDEX does not have the expected signed format (found %d members)", member_count);
+        return FLUX_ERR_SOURCE;
+    }
+
+    struct stat st;
+    if (stat(tar_gz_path, &st) != 0) return FLUX_ERR_SOURCE;
+
+    system("mkdir -p /tmp/flux-build");
+    const char *sig_path = "/tmp/flux-build/apkindex-sig.tar.gz";
+    const char *data_path = "/tmp/flux-build/apkindex-data.tar.gz";
+    if (alpine_gzip_extract_range(tar_gz_path, offsets[0], offsets[1] - offsets[0], sig_path) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
+    if (alpine_gzip_extract_range(tar_gz_path, offsets[1], (long)st.st_size - offsets[1], data_path) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
+
+    if (alpine_verify_signature(data_path, sig_path, ALPINE_KEYS_DIR) != FLUX_ERR_NONE) {
+        flux_err("APKINDEX signature verification failed, refusing to trust it");
+        remove(sig_path);
+        remove(data_path);
+        return FLUX_ERR_CACHE;
+    }
 
     const char *destdir = "/tmp/flux-alpine-index-extract";
     char cmd[768];
-    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xzf \"%s\" -C \"%s\" APKINDEX", destdir, destdir, tar_gz_path, destdir);
-    if (system(cmd) != 0) return FLUX_ERR_SOURCE;
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\" && tar -xzf \"%s\" -C \"%s\" APKINDEX", destdir, destdir, data_path, destdir);
+    int ok = (system(cmd) == 0);
+    remove(sig_path);
+    remove(data_path);
+    if (!ok) return FLUX_ERR_SOURCE;
+
+    snprintf(out_index_path, 300, "%s/APKINDEX", destdir);
+    return FLUX_ERR_NONE;
+}
+
+int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
+    memset(index, 0, sizeof(*index));
 
     char idx_path[300];
-    snprintf(idx_path, sizeof(idx_path), "%s/APKINDEX", destdir);
+    if (verify_and_extract_index(tar_gz_path, idx_path) != FLUX_ERR_NONE) return FLUX_ERR_SOURCE;
+
     FILE *f = fopen(idx_path, "rb");
     if (!f) return FLUX_ERR_SOURCE;
 
@@ -55,10 +98,7 @@ int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
     size_t rd = fread(buf, 1, (size_t)size, f);
     fclose(f);
     buf[rd] = '\0';
-
-    char rmcmd[320];
-    snprintf(rmcmd, sizeof(rmcmd), "rm -rf \"%s\"", destdir);
-    system(rmcmd);
+    system("rm -rf /tmp/flux-alpine-index-extract");
 
     alpine_pkg_t *pkgs = malloc(sizeof(alpine_pkg_t) * ALPINE_MAX_INDEX_PKGS);
     if (!pkgs) { free(buf); return FLUX_ERR_GENERAL; }
@@ -74,7 +114,9 @@ int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
         if (nl) *nl = '\0';
 
         if (*line == '\0') {
-            if (have_pkg && count < ALPINE_MAX_INDEX_PKGS) pkgs[count++] = cur;
+            // reject a stanza with an unsafe name/version rather than let it become an addressable package later
+            if (have_pkg && alpine_name_is_safe(cur.name) && alpine_name_is_safe(cur.version) && count < ALPINE_MAX_INDEX_PKGS)
+                pkgs[count++] = cur;
             memset(&cur, 0, sizeof(cur));
             have_pkg = 0;
         } else if (line[1] == ':') {
@@ -99,7 +141,8 @@ int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
 
         line = nl ? nl + 1 : NULL;
     }
-    if (have_pkg && count < ALPINE_MAX_INDEX_PKGS) pkgs[count++] = cur;
+    if (have_pkg && alpine_name_is_safe(cur.name) && alpine_name_is_safe(cur.version) && count < ALPINE_MAX_INDEX_PKGS)
+        pkgs[count++] = cur;
 
     index->raw_text = buf;
     index->pkgs = pkgs;
