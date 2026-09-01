@@ -23,6 +23,15 @@ int flux_autoremove_orphans(int *removed_count);
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
 int flux_is_kira_pkg(const char *name);
 
+// checks whether any of `paths` is already owned by some OTHER installed
+// package (pkg's own prior files don't count, an upgrade naturally reuses
+// them) - conservative by design: a real collision refuses rather than
+// silently overwriting. On a collision, owner_out/colliding_path_out are
+// filled in and FLUX_ERR_GENERAL is returned; FLUX_ERR_NONE means clear.
+int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count,
+                               char *owner_out, size_t owner_outlen,
+                               char *colliding_path_out, size_t path_outlen);
+
 int flux_native_target(char *out, size_t outlen);
 int flux_is_archive_name(const char *name);
 int flux_extract_source(const char *fetched_path, const char *dest);

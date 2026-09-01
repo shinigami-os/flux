@@ -410,6 +410,39 @@ int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const 
     return 0;
 }
 
+int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count,
+                               char *owner_out, size_t owner_outlen,
+                               char *colliding_path_out, size_t path_outlen) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int name_count = 0;
+    flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &name_count);
+
+    for (int i = 0; i < name_count; i++) {
+        if (strcmp(names[i], pkg) == 0) continue; // own prior files, an upgrade reuses them
+
+        char files_path[FLUX_MAX_PATH_LEN + 8];
+        snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", names[i]);
+        FILE *f = fopen(files_path, "r");
+        if (!f) continue;
+
+        char line[FLUX_MAX_PATH_LEN];
+        while (fgets(line, sizeof(line), f)) {
+            strip_newline(line);
+            if (line[0] == '\0') continue;
+            for (int j = 0; j < path_count; j++) {
+                if (strcmp(line, paths[j]) == 0) {
+                    fclose(f);
+                    strncpy(owner_out, names[i], owner_outlen - 1);
+                    strncpy(colliding_path_out, line, path_outlen - 1);
+                    return FLUX_ERR_GENERAL;
+                }
+            }
+        }
+        fclose(f);
+    }
+    return FLUX_ERR_NONE;
+}
+
 int flux_autoremove_orphans(int *removed_count) {
     *removed_count = 0;
 

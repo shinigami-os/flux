@@ -437,12 +437,6 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         return FLUX_ERR_GENERAL;
     }
 
-    flux_step("installing to system...");
-    if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
-        flux_err("failed to copy files to system");
-        return FLUX_ERR_GENERAL;
-    }
-
     char (*installed_files)[FLUX_MAX_PATH_LEN] = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
     const char **file_ptrs = malloc((size_t)FLUX_MAX_INSTALLED_FILES * sizeof(char *));
     if (!installed_files || !file_ptrs) {
@@ -453,6 +447,26 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     }
     int file_count = 0;
     collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
+
+    // checked BEFORE anything touches the real root - refuse rather than
+    // silently overwrite a file another installed package already owns
+    char conflict_owner[FLUX_MAX_NAME_LEN], conflict_path[FLUX_MAX_PATH_LEN];
+    if (flux_check_file_conflicts(found.name, file_ptrs, file_count,
+                                   conflict_owner, sizeof(conflict_owner),
+                                   conflict_path, sizeof(conflict_path)) != FLUX_ERR_NONE) {
+        flux_err("'%s' conflicts with already-installed '%s' over %s", found.name, conflict_owner, conflict_path);
+        free(installed_files);
+        free(file_ptrs);
+        return FLUX_ERR_GENERAL;
+    }
+
+    flux_step("installing to system...");
+    if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
+        flux_err("failed to copy files to system");
+        free(installed_files);
+        free(file_ptrs);
+        return FLUX_ERR_GENERAL;
+    }
 
     flux_pkg_info_t info;
     memset(&info, 0, sizeof(info));
