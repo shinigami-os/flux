@@ -221,11 +221,14 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
             return FLUX_ERR_NETWORK;
         }
 
+        // a dependency name may itself be a virtual capability (e.g. "ninja" is provided by "samurai", not a real package) - same fallback alpine_resolve_deps() already uses for a package's own D: tokens
         const alpine_pkg_t *p = alpine_repos_find_by_name(&ctx->repos, pkg, NULL);
+        if (!p) p = alpine_repos_find_provider(&ctx->repos, pkg, NULL);
         if (!p) {
             flux_err("no package found for '%s'", pkg);
             return FLUX_ERR_NOT_FOUND;
         }
+        const char *real_name = p->name; // queue/install by the real package name, not whatever capability name was asked for
 
         char dep_names[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
         int dep_count = 0;
@@ -248,8 +251,8 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
             if (err != FLUX_ERR_NONE) return err;
         }
 
-        if (!queue_contains(queue, pkg) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
-            strncpy(queue->pkgs[queue->count].name, pkg, FLUX_MAX_NAME_LEN - 1);
+        if (!queue_contains(queue, real_name) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
+            strncpy(queue->pkgs[queue->count].name, real_name, FLUX_MAX_NAME_LEN - 1);
             queue->pkgs[queue->count].source = 'A';
             queue->count++;
         }
