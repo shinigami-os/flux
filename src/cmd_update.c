@@ -6,12 +6,14 @@
 #include "../include/flux.h"
 #include "../include/util.h"
 #include "../include/parser.h"
+#include "../include/alpine.h"
 
 int flux_install(int argc, char **argv, const char *usage);
 
 static void check_for_flux_release(void);
 static void check_for_base_release(void);
 static void check_for_kernel_release(const flux_config_t *config);
+static void check_musl_soname(const flux_config_t *config);
 static void update_flatpak(void);
 static int  get_git_head(const char *repo_path, char *out, size_t outlen);
 static int  report_and_collect_updates(const flux_config_t *config, const char *old_head, const char *new_head,
@@ -127,6 +129,7 @@ int flux_update(int argc, char **argv, const char *usage) {
     check_for_flux_release();
     check_for_base_release();
     check_for_kernel_release(&config);
+    check_musl_soname(&config);
     return FLUX_ERR_NONE;
 }
 
@@ -189,6 +192,22 @@ static int report_and_collect_updates(const flux_config_t *config, const char *o
         flux_print_table(title, rows, *count);
     }
     return FLUX_ERR_NONE;
+}
+
+// musl-ABI policy: Kira builds its own musl, Alpine tracks its own, but
+// packages depend on it via the SONAME so:libc.musl-<arch>.so.1, which musl
+// never bumps - so the existing so:-resolution path (alpine_resolve.c)
+// already satisfies it with no version pinning, as long as this exists
+static void check_musl_soname(const flux_config_t *config) {
+    char arch[ALPINE_MAX_ARCH_LEN];
+    if (alpine_arch_from_target(config->package_target, arch, sizeof(arch)) != FLUX_ERR_NONE) return;
+
+    char path[64];
+    snprintf(path, sizeof(path), "/lib/ld-musl-%s.so.1", arch);
+
+    struct stat st;
+    if (stat(path, &st) != 0)
+        flux_warn("%s not found - Alpine packages will fail to resolve so:libc.musl-%s.so.1", path, arch);
 }
 
 static void update_flatpak(void) {
