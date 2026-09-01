@@ -32,6 +32,12 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
                                char *owner_out, size_t owner_outlen,
                                char *colliding_path_out, size_t path_outlen);
 
+// writes body to a temp script (optionally preceded by env_prefix, e.g.
+// "export FOO=\"bar\"\n"), runs it with `sh`, then removes it - shared by
+// kotodama's %post-install hook and Alpine's trigger scripts, both of which
+// run against the real root rather than a $DESTDIR
+int flux_run_script(const char *body, const char *env_prefix);
+
 int flux_native_target(char *out, size_t outlen);
 int flux_is_archive_name(const char *name);
 int flux_extract_source(const char *fetched_path, const char *dest);

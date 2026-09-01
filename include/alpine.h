@@ -94,6 +94,22 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
 
 #define ALPINE_KEYS_DIR "/etc/flux/alpine-keys"
 
+// Alpine's control member (already extracted by alpine_apk_extract) can
+// carry .pre-install/.post-install/.trigger scripts alongside .PKGINFO -
+// unlike kotodama's %post-install (Kira-authored), this content is
+// third-party and runs against the real root, so it needs to be surfaced
+// to the user before running, not executed silently
+#define ALPINE_TRIGGER_COUNT 3
+// ".pre-install"/".post-install"/".trigger", in run order, for index in [0, ALPINE_TRIGGER_COUNT)
+const char *alpine_trigger_script_name(int index);
+int alpine_has_triggers(const char *control_extract_dir);
+// reads the named script's body (".pre-install"/".post-install"/".trigger")
+// from control_extract_dir; returns FLUX_ERR_NONE with body[0] == '\0' if
+// that script doesn't exist for this package
+int alpine_read_trigger_script(const char *control_extract_dir, const char *script_name, char *body, size_t body_len);
+// runs an already-read trigger script body via flux_run_script()
+int alpine_run_trigger_script(const char *body);
+
 // verifies the control member's compressed bytes against the detached RSA
 // signature carried in the sig member, against a vendored trusted key in
 // keys_dir - matches Alpine's own abuild-sign scheme (sha1 digest, RSA

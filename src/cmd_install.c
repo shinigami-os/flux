@@ -137,19 +137,9 @@ static int run_post_install_hook(const char *hook, const char *recipe_dir) {
     if (strlen(hook) == 0) return 0;
 
     flux_step("running post-install...");
-    system("mkdir -p /tmp/flux-build");
-    const char *script_path = "/tmp/flux-build/.flux_post_install.sh";
-    FILE *f = fopen(script_path, "w");
-    if (!f) return FLUX_ERR_GENERAL;
-    fprintf(f, "#!/bin/sh\nset -e\nexport FLUX_RECIPE_DIR=\"%s\"\n%s\n", recipe_dir, hook);
-    fclose(f);
-    chmod(script_path, 0755);
-
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "sh \"%s\"", script_path);
-    int ret = system(cmd);
-    remove(script_path);
-    return ret;
+    char env_prefix[FLUX_MAX_PATH_LEN + 32];
+    snprintf(env_prefix, sizeof(env_prefix), "export FLUX_RECIPE_DIR=\"%s\"\n", recipe_dir);
+    return flux_run_script(hook, env_prefix);
 }
 
 static int run_hook(const char *hook, const char *build_dir, const char *destdir, const char *recipe_dir) {

@@ -483,6 +483,24 @@ int flux_is_kira_pkg(const char *name) {
     return strncmp(name, "kira-", 5) == 0;
 }
 
+int flux_run_script(const char *body, const char *env_prefix) {
+    if (!body || strlen(body) == 0) return 0;
+
+    system("mkdir -p /tmp/flux-build");
+    const char *script_path = "/tmp/flux-build/.flux_script.sh";
+    FILE *f = fopen(script_path, "w");
+    if (!f) return FLUX_ERR_GENERAL;
+    fprintf(f, "#!/bin/sh\nset -e\n%s%s\n", env_prefix ? env_prefix : "", body);
+    fclose(f);
+    chmod(script_path, 0755);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "sh \"%s\"", script_path);
+    int ret = system(cmd);
+    remove(script_path);
+    return ret;
+}
+
 int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen) {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "git ls-remote --tags --refs \"%s\" > /tmp/flux_git_tags_raw 2>/dev/null", repo_url);
