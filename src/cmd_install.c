@@ -419,6 +419,53 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         return FLUX_ERR_CACHE;
     }
 
+    char control_extract_dir[256];
+    snprintf(control_extract_dir, sizeof(control_extract_dir), "/tmp/flux-build/%s-apk-control", found.name);
+    if (alpine_apk_extract(control_path, control_extract_dir) != FLUX_ERR_NONE) {
+        flux_err("failed to extract control member for %s", found.name);
+        return FLUX_ERR_GENERAL;
+    }
+
+    // third-party scripts, unlike kotodama's %post-install (Kira-authored,
+    // runs silently) - surface them and get explicit consent before running
+    // anything as root, rather than trusting Alpine's signature chain alone
+    int triggers_approved = 0;
+    char trigger_bodies[ALPINE_TRIGGER_COUNT][FLUX_MAX_HOOK_LEN];
+    memset(trigger_bodies, 0, sizeof(trigger_bodies));
+
+    if (alpine_has_triggers(control_extract_dir)) {
+        for (int i = 0; i < ALPINE_TRIGGER_COUNT; i++)
+            alpine_read_trigger_script(control_extract_dir, alpine_trigger_script_name(i), trigger_bodies[i], FLUX_MAX_HOOK_LEN);
+
+        flux_warn("%s ships scripts that will run as root on install:", found.name);
+        for (int i = 0; i < ALPINE_TRIGGER_COUNT; i++) {
+            if (trigger_bodies[i][0] == '\0') continue;
+            printf("\n--- %s ---\n%s\n", alpine_trigger_script_name(i), trigger_bodies[i]);
+        }
+
+        if (g_yes) {
+            triggers_approved = 1;
+        } else {
+            printf("Run these scripts? [y/N] ");
+            fflush(stdout);
+            char answer[8] = {0};
+            triggers_approved = fgets(answer, sizeof(answer), stdin) && (answer[0] == 'y' || answer[0] == 'Y');
+        }
+
+        if (!triggers_approved) {
+            flux_err("declined to run %s's install scripts, aborting install", found.name);
+            return FLUX_ERR_GENERAL;
+        }
+
+        if (trigger_bodies[0][0] != '\0') {
+            flux_step("running .pre-install...");
+            if (alpine_run_trigger_script(trigger_bodies[0]) != 0) {
+                flux_err(".pre-install failed for %s", found.name);
+                return FLUX_ERR_BUILD;
+            }
+        }
+    }
+
     char destdir[256];
     snprintf(destdir, sizeof(destdir), "/tmp/flux-build/%s-apk-destdir", found.name);
     flux_step("extracting...");
@@ -458,6 +505,17 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         return FLUX_ERR_GENERAL;
     }
 
+    if (triggers_approved) {
+        const int post_indices[2] = { 1, 2 }; // .post-install, .trigger
+        for (int j = 0; j < 2; j++) {
+            int i = post_indices[j];
+            if (trigger_bodies[i][0] == '\0') continue;
+            flux_step("running %s...", alpine_trigger_script_name(i));
+            if (alpine_run_trigger_script(trigger_bodies[i]) != 0)
+                flux_warn("%s failed for %s, continuing", alpine_trigger_script_name(i), found.name);
+        }
+    }
+
     flux_pkg_info_t info;
     memset(&info, 0, sizeof(info));
     strncpy(info.name,    found.name,    FLUX_MAX_NAME_LEN - 1);
@@ -472,7 +530,8 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     free(file_ptrs);
 
     char cleanup[2048];
-    snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"", destdir, apk_path, sig_path, control_path, data_path);
+    snprintf(cleanup, sizeof(cleanup), "rm -rf \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
+             destdir, control_extract_dir, apk_path, sig_path, control_path, data_path);
     system(cleanup);
 
     flux_ok("%s v%s installed", found.name, found.version);
