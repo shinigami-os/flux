@@ -49,8 +49,8 @@ int flux_update(int argc, char **argv, const char *usage) {
 
             char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
             snprintf(cmd, sizeof(cmd),
-                    "rm -rf \"%s\" && git clone --depth 1 \"%s\" \"%s\"",
-                    config.local_repo_path, FLUX_RECIPES_REPO_URL, config.local_repo_path);
+                    "rm -rf \"%s\" && git clone --depth 1 --branch \"%s\" \"%s\" \"%s\"",
+                    config.local_repo_path, config.recipes_branch, FLUX_RECIPES_REPO_URL, config.local_repo_path);
             if (system(cmd) != 0) {
                 flux_err("failed to clone recipe repo");
                 return FLUX_ERR_NETWORK;
@@ -61,8 +61,8 @@ int flux_update(int argc, char **argv, const char *usage) {
             char tmp_tar[FLUX_MAX_PATH_LEN];
             snprintf(tmp_tar, sizeof(tmp_tar), "/tmp/flux-recipes.tar.gz");
 
-            char archive_url[FLUX_MAX_URL_LEN + 32];
-            snprintf(archive_url, sizeof(archive_url), "%s/archive/refs/heads/main.tar.gz", FLUX_RECIPES_REPO_URL);
+            char archive_url[FLUX_MAX_URL_LEN + 96];
+            snprintf(archive_url, sizeof(archive_url), "%s/archive/refs/heads/%s.tar.gz", FLUX_RECIPES_REPO_URL, config.recipes_branch);
             if (flux_download(archive_url, tmp_tar) != FLUX_ERR_NONE) {
                 flux_err("failed to download recipe repo");
                 return FLUX_ERR_NETWORK;
@@ -84,10 +84,12 @@ int flux_update(int argc, char **argv, const char *usage) {
     else{
         have_old_head = (get_git_head(config.local_repo_path, old_head, sizeof(old_head)) == FLUX_ERR_NONE);
 
-        flux_step("syncing recipe repo...");
+        flux_step("syncing recipe repo (%s)...", config.recipes_branch);
 
-        char cmd[FLUX_MAX_PATH_LEN + 32];
-        snprintf(cmd, sizeof(cmd), "git -C \"%s\" pull", config.local_repo_path);
+        // fetch+reset onto the configured branch, not a plain "pull" - that would just advance whatever's already checked out, missing a branch change in flux.conf
+        char cmd[FLUX_MAX_PATH_LEN * 2 + 256];
+        snprintf(cmd, sizeof(cmd), "git -C \"%s\" fetch --depth 1 origin \"%s\" && git -C \"%s\" checkout -B \"%s\" FETCH_HEAD",
+                 config.local_repo_path, config.recipes_branch, config.local_repo_path, config.recipes_branch);
 
         int ret = system(cmd);
         if (ret != 0) {

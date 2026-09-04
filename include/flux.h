@@ -62,6 +62,7 @@ typedef struct {
     char package_target[64];
     char alpine_mirror_url[FLUX_MAX_URL_LEN];
     char alpine_branch[32];
+    char recipes_branch[64]; // which flux-recipes branch `flux update` tracks, defaults to "main"
 }flux_config_t;
 
 typedef struct {
