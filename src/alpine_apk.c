@@ -21,24 +21,41 @@ int alpine_apk_download(const flux_config_t *config, const char *repo, const cha
     return flux_download(url, path_out);
 }
 
-// gzip -t needs an exact whole-member byte range (not monotonic in N), so member starts are found via magic-byte scan + exact-range gzip -t
+// scans for gzip's magic bytes (1f 8b 08) directly in C - not shelled out, since BusyBox grep (what Kira actually
+// runs) has no -b (byte offset) flag at all, unlike the GNU grep this was originally developed and tested against
+static int find_magic_offsets(const char *path, long *candidates, int max_candidates, int *candidate_count) {
+    *candidate_count = 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return FLUX_ERR_GENERAL;
+
+    unsigned char buf[8192];
+    long pos = 0;
+    size_t n = fread(buf, 1, sizeof(buf), f);
+
+    while (n >= 3) {
+        for (size_t i = 0; i + 2 < n; i++) {
+            if (buf[i] == 0x1f && buf[i + 1] == 0x8b && buf[i + 2] == 0x08) {
+                if (*candidate_count < max_candidates) candidates[(*candidate_count)++] = pos + (long)i;
+            }
+        }
+        buf[0] = buf[n - 2];
+        buf[1] = buf[n - 1];
+        pos += (long)(n - 2);
+        size_t got = fread(buf + 2, 1, sizeof(buf) - 2, f);
+        if (got == 0) break;
+        n = got + 2;
+    }
+    fclose(f);
+    return FLUX_ERR_NONE;
+}
+
+// gzip -t needs an exact whole-member byte range (not monotonic in N), so each magic-byte candidate is confirmed with an exact-range gzip -t
 int alpine_gzip_find_members(const char *path, long *offsets, int max_offsets, int *count) {
     *count = 0;
 
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "grep -abo $'\\x1f\\x8b\\x08' \"%s\"", path);
-    FILE *f = popen(cmd, "r");
-    if (!f) return FLUX_ERR_GENERAL;
-
     long candidates[64];
     int candidate_count = 0;
-    char line[64];
-    while (candidate_count < 64 && fgets(line, sizeof(line), f)) {
-        char *endptr;
-        long off = strtol(line, &endptr, 10);
-        if (endptr != line) candidates[candidate_count++] = off;
-    }
-    pclose(f);
+    if (find_magic_offsets(path, candidates, 64, &candidate_count) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
     if (candidate_count == 0 || candidates[0] != 0) return FLUX_ERR_SOURCE;
 
