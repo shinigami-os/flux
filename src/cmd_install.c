@@ -333,22 +333,11 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
     return FLUX_ERR_NONE;
 }
 
+// one atomic "cp -a destdir/. /" - a per-file "find | while read; do cp; done" loop let one failed cp go unnoticed in practice, since a failing command inside a piped while-read subshell doesn't reliably abort the pipeline on every /bin/sh
 static int copy_destdir_to_root(const char *destdir) {
-    FILE *f = fopen("/tmp/flux_copy.sh", "w");
-    if (!f) return FLUX_ERR_GENERAL;
-    fprintf(f,
-        "#!/bin/sh\nset -e\n"
-        "find \"%s\" \\( -type f -o -type l \\) | while IFS= read -r src; do\n"
-        "  dst=\"${src#%s}\"\n"
-        "  mkdir -p \"$(dirname \"$dst\")\"\n"
-        "  cp -a \"$src\" \"$dst\"\n"
-        "done\n",
-        destdir, destdir);
-    fclose(f);
-    chmod("/tmp/flux_copy.sh", 0755);
-    int ret = system("sh /tmp/flux_copy.sh");
-    remove("/tmp/flux_copy.sh");
-    return ret == 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
+    char cmd[600];
+    snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
+    return system(cmd) == 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
 }
 
 static int collect_files_from_destdir(const char *destdir, char files[][FLUX_MAX_PATH_LEN], const char **ptrs, int *count) {
