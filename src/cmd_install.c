@@ -230,6 +230,9 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         }
         const char *real_name = p->name; // queue/install by the real package name, not whatever capability name was asked for
 
+        // kira-base's bootstrap layer (musl, static busybox, ...) is never flux-managed - already satisfied, not installable
+        if (strcmp(real_name, "musl") == 0 || strcmp(real_name, "busybox") == 0) return FLUX_ERR_NONE;
+
         char dep_names[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
         int dep_count = 0;
         char conflicts[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
