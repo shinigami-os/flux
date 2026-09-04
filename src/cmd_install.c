@@ -253,6 +253,7 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
 
         if (!queue_contains(queue, real_name) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
             strncpy(queue->pkgs[queue->count].name, real_name, FLUX_MAX_NAME_LEN - 1);
+            strncpy(queue->pkgs[queue->count].version, p->version, FLUX_MAX_VERSION_LEN - 1);
             queue->pkgs[queue->count].source = 'A';
             queue->count++;
         }
@@ -321,6 +322,7 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
 
     if (!queue_contains(queue, pkg) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
         strncpy(queue->pkgs[queue->count].name, pkg, FLUX_MAX_NAME_LEN - 1);
+        strncpy(queue->pkgs[queue->count].version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
         queue->pkgs[queue->count].source = 'K';
         queue->count++;
     }
@@ -407,9 +409,16 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         return FLUX_ERR_SOURCE;
     }
 
-    if (flux_db_is_installed(found.name) && !g_force) {
+    if (flux_db_is_installed(found.name)) {
         flux_pkg_info_t info;
-        if (flux_db_read_info(found.name, &info) == FLUX_ERR_NONE && strcmp(info.version, found.version) == 0) {
+        if (flux_db_read_info(found.name, &info) == FLUX_ERR_NONE && strcmp(info.source, "alpine") != 0) {
+            // same name, different provenance (e.g. kotodama's own "musl" vs Alpine's "musl") - not a safe self-upgrade
+            if (!g_force) {
+                flux_err("'%s' is already installed from %s, not alpine - refusing to replace it silently (use -f to override)", found.name, info.source);
+                return FLUX_ERR_GENERAL;
+            }
+            flux_warn("'%s' was installed from %s, forcing replacement with the Alpine package of the same name", found.name, info.source);
+        } else if (!g_force && strcmp(info.version, found.version) == 0) {
             if (!g_auto_installed) flux_db_set_auto_installed(found.name, 0);
             flux_ok("%s is already installed", found.name);
             return FLUX_ERR_NONE;
@@ -564,25 +573,16 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     return FLUX_ERR_NONE;
 }
 
-static void build_queue_row(const flux_config_t *config, const flux_queue_entry_t *entry, flux_table_row_t *row) {
+static void build_queue_row(const flux_queue_entry_t *entry, flux_table_row_t *row) {
     strncpy(row->col1, entry->name, FLUX_MAX_NAME_LEN - 1);
-    if (entry->source == 'A') {
-        strncpy(row->col2, "alpine", FLUX_MAX_VERSION_LEN - 1);
-        return;
-    }
-    char kp[FLUX_MAX_PATH_LEN * 2 + 16];
-    snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, entry->name);
-    flux_recipe_t r;
-    memset(&r, 0, sizeof(r));
-    parse_kotodama(&r, kp);
-    strncpy(row->col2, r.version, FLUX_MAX_VERSION_LEN - 1);
+    strncpy(row->col2, entry->version, FLUX_MAX_VERSION_LEN - 1);
 }
 
 // prints the resolved queue and asks to proceed; 1 = proceed (including -y), 0 = user declined
-static int confirm_queue(const flux_config_t *config, flux_install_queue_t *queue) {
+static int confirm_queue(flux_install_queue_t *queue) {
     flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
     for (int i = 0; i < queue->count; i++)
-        build_queue_row(config, &queue->pkgs[i], &rows[i]);
+        build_queue_row(&queue->pkgs[i], &rows[i]);
 
     char title[64];
     snprintf(title, sizeof(title), "%d package%s will be installed", queue->count, queue->count == 1 ? "" : "s");
@@ -695,7 +695,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         int err2 = collect_deps(pkg, &ctx, &queue, visited, &visited_count);
         if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
 
-        if (queue.count > 1 && !confirm_queue(&config, &queue)) {
+        if (queue.count > 1 && !confirm_queue(&queue)) {
             alpine_repos_free(&ctx.repos);
             return FLUX_ERR_NONE;
         }
@@ -802,7 +802,7 @@ int flux_install(int argc, char **argv, const char *usage) {
         if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
 
         if ((queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0].name, pkg) != 0))
-            && !confirm_queue(&config, &queue)) {
+            && !confirm_queue(&queue)) {
             alpine_repos_free(&ctx.repos);
             return FLUX_ERR_NONE;
         }

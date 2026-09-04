@@ -97,6 +97,7 @@ typedef struct {
 
 typedef struct {
     char name[FLUX_MAX_NAME_LEN];
+    char version[FLUX_MAX_VERSION_LEN]; // resolved at queue-build time, so the confirmation table needs no second lookup
     char source; // 'K' = kotodama, 'A' = alpine
 } flux_queue_entry_t;
 
