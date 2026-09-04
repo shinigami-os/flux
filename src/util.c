@@ -74,7 +74,6 @@ int flux_load_config(flux_config_t *config) {
         if (strcmp(key, "package_target") == 0) strncpy(config->package_target, val, sizeof(config->package_target) - 1);
         if (strcmp(key, "alpine_mirror_url") == 0) strncpy(config->alpine_mirror_url, val, FLUX_MAX_URL_LEN - 1);
         if (strcmp(key, "alpine_branch") == 0) strncpy(config->alpine_branch, val, sizeof(config->alpine_branch) - 1);
-        if (strcmp(key, "recipes_branch") == 0) strncpy(config->recipes_branch, val, sizeof(config->recipes_branch) - 1);
     }
 
     fclose(f);
@@ -83,8 +82,6 @@ int flux_load_config(flux_config_t *config) {
         strncpy(config->alpine_mirror_url, "https://dl-cdn.alpinelinux.org/alpine", FLUX_MAX_URL_LEN - 1);
     if (config->alpine_branch[0] == '\0')
         strncpy(config->alpine_branch, "edge", sizeof(config->alpine_branch) - 1);
-    if (config->recipes_branch[0] == '\0')
-        strncpy(config->recipes_branch, "main", sizeof(config->recipes_branch) - 1);
 
     return FLUX_ERR_NONE;
 }

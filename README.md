@@ -125,12 +125,11 @@ cross_gcc_libpath = /opt/musl-cross/lib/gcc/x86_64-linux-musl/9.4.0
 package_target = x86_64-linux-musl
 alpine_mirror_url = https://dl-cdn.alpinelinux.org/alpine
 alpine_branch = edge
-recipes_branch = main
 ```
 
 `alpine_mirror_url`/`alpine_branch` default to Alpine's own CDN and the `edge` branch if left unset - set `alpine_branch = stable` to track Alpine's stable branch instead.
 
-`recipes_branch` is which branch of `flux-recipes` `flux update` clones/syncs, defaulting to `main` if unset. Note that the repo URL itself is always `FLUX_RECIPES_REPO_URL` (compiled into `include/flux.h`) - `remote_repo_url` above is parsed but not currently used for anything.
+`flux update` always clones/syncs `flux-recipes`' GitHub default branch (`FLUX_RECIPES_REPO_URL`, compiled into `include/flux.h`) - there is no config option to pick a different one. Note `remote_repo_url` above is parsed but not currently used for anything.
 
 `flux_secret_key_path` only needs to exist on a machine that publishes packages. If it's missing, `flux build`/`flux install` skip cache signing and storage instead of failing.
 

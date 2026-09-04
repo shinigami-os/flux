@@ -5,6 +5,8 @@
 #define FLUX_VERSION "26.08-7"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
+// matches flux-recipes' actual GitHub default branch - only needed for the no-git tarball fallback below, git clone/pull just follow the default on their own
+#define FLUX_RECIPES_BRANCH "kira-only"
 #define KIRA_BASE_REPO_URL "https://github.com/shinigami-os/kira-base"
 
 #define FLUX_ERR_NONE 0
@@ -62,7 +64,6 @@ typedef struct {
     char package_target[64];
     char alpine_mirror_url[FLUX_MAX_URL_LEN];
     char alpine_branch[32];
-    char recipes_branch[64]; // which flux-recipes branch `flux update` tracks, defaults to "main"
 }flux_config_t;
 
 typedef struct {
