@@ -38,7 +38,8 @@
 // heap-allocated wherever it's used (see cmd_install.c), not stack - several
 // already-installed packages were silently hitting the old 4096 cap
 #define FLUX_MAX_INSTALLED_FILES 32768
-#define FLUX_MAX_INSTALL_QUEUE 256
+// also doubles as the cap on flux_db_list_installed() - a kira-desktop-* meta-package's Alpine deps alone can put a real system's installed count well past the old 256
+#define FLUX_MAX_INSTALL_QUEUE 1024
 
 
 typedef int (*flux_cmd_fn)(int argc, char **argv, const char *usage);

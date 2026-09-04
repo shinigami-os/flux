@@ -46,6 +46,7 @@ typedef struct {
 
 int alpine_arch_from_target(const char *package_target, char *out, size_t outlen);
 int alpine_index_url(const flux_config_t *config, const char *repo, const char *arch, char *out, size_t outlen);
+void alpine_index_cache_path(const char *repo, const char *arch, char *out, size_t outlen);
 int alpine_index_fetch(const flux_config_t *config, const char *repo, const char *arch, char *path_out, size_t path_outlen);
 // fetches+verifies the signed index, then parses it - see alpine_verify_signature
 int alpine_index_load(const char *tar_gz_path, alpine_index_t *index);
@@ -71,6 +72,9 @@ typedef struct {
     alpine_index_t community;
 } alpine_repos_t;
 
+// fetches+verifies+caches both indexes from the network - only `flux update` should call this
+int alpine_repos_sync(const flux_config_t *config, const char *arch, alpine_repos_t *repos);
+// loads whatever `flux update` last cached, no network - what `flux install`/`flux search`/etc use, fails with a "run flux update" hint if nothing is cached yet
 int alpine_repos_load(const flux_config_t *config, const char *arch, alpine_repos_t *repos);
 void alpine_repos_free(alpine_repos_t *repos);
 const alpine_pkg_t *alpine_repos_find_by_name(const alpine_repos_t *repos, const char *name, const char **out_repo);

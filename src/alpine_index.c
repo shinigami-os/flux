@@ -31,12 +31,16 @@ int alpine_index_url(const flux_config_t *config, const char *repo, const char *
     return FLUX_ERR_NONE;
 }
 
+void alpine_index_cache_path(const char *repo, const char *arch, char *out, size_t outlen) {
+    snprintf(out, outlen, "/var/cache/flux/alpine/%s-%s-APKINDEX.tar.gz", repo, arch);
+}
+
 int alpine_index_fetch(const flux_config_t *config, const char *repo, const char *arch, char *path_out, size_t path_outlen) {
     char url[FLUX_MAX_URL_LEN * 2];
     if (alpine_index_url(config, repo, arch, url, sizeof(url)) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
     system("mkdir -p /var/cache/flux/alpine");
-    snprintf(path_out, path_outlen, "/var/cache/flux/alpine/%s-%s-APKINDEX.tar.gz", repo, arch);
+    alpine_index_cache_path(repo, arch, path_out, path_outlen);
 
     flux_step("fetching Alpine %s index (%s/%s)...", arch, config->alpine_branch, repo);
     return flux_download(url, path_out);

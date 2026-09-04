@@ -217,8 +217,8 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         }
 
         if (ensure_alpine_repos(ctx) != FLUX_ERR_NONE) {
-            flux_err("failed to load Alpine package index");
-            return FLUX_ERR_NETWORK;
+            flux_err("no Alpine package index cached yet - run 'flux update' first");
+            return FLUX_ERR_CACHE;
         }
 
         // a dependency name may itself be a virtual capability (e.g. "ninja" is provided by "samurai", not a real package) - same fallback alpine_resolve_deps() already uses for a package's own D: tokens
@@ -371,8 +371,8 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     alpine_repos_t *repos = g_active_repos;
     if (!repos) {
         if (alpine_repos_load(config, arch, &local_repos) != FLUX_ERR_NONE) {
-            flux_err("failed to load Alpine package index");
-            return FLUX_ERR_NETWORK;
+            flux_err("no Alpine package index cached yet - run 'flux update' first");
+            return FLUX_ERR_CACHE;
         }
         repos = &local_repos;
         own_repos = 1;

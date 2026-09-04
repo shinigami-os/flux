@@ -24,7 +24,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 | `flux install [--flatpak] <pkg>` | Install a package: a `kira-`-prefixed name is built from a kotodama recipe, anything else is resolved against Alpine's package index. `--flatpak` installs via Flathub instead, skipping both |
 | `flux remove [-a] <pkg>` | Remove a package and all its installed files. `-a`/`--autoremove` also removes now-orphaned auto-installed deps |
 | `flux autoremove` | Remove every installed package that's auto-installed and no longer needed by anything |
-| `flux update [-i]` | Sync the local recipe repo, report which installed packages have a newer recipe version, and check for a newer flux or kira-base release. `-i` installs the reported updates. |
+| `flux update [-i]` | Sync the local recipe repo and the Alpine package index, report which installed packages (kotodama or Alpine) have a newer version available, and check for a newer flux or kira-base release. `-i` installs the reported updates. |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
 | `flux list [-a]` | List installed packages, sorted alphabetically. `-a`/`--auto` also includes auto-installed deps |
@@ -191,7 +191,11 @@ Cutting a release is just `git tag <version> && git push --tags` on the `flux` r
 
 `flux update` diffs the recipe repo's old and new `HEAD` after syncing (`git diff --name-only <old> <new> -- '*/kotodama'`) to find every recipe that changed. For each changed `<pkg>/kotodama`, if `pkg` is currently installed and its recorded version (`/var/lib/flux/installed/<pkg>/info`) differs from the version now in the recipe, it's reported as `pkg  old -> new`. Recipes that changed but aren't installed, or whose version didn't actually change (a comment tweak, a hook fix without a version bump), are not reported - this is meant to answer "what's outdated on my system," not "what changed upstream."
 
-Plain `flux update` only reports; `flux update -i` additionally force-reinstalls (`flux install -y -f`) every package it just reported, upgrading them to the recipe's current version.
+`flux update` also re-fetches and re-verifies both Alpine indexes (`main`/`community`) into `/var/cache/flux/alpine/`, then for every installed `source = alpine` package compares its recorded version against that freshly synced index the same way. This is also the only time the Alpine index is ever fetched over the network - `flux install`/`flux search` only ever read the cache `flux update` last wrote, so a first `flux install` of an Alpine package on a machine that has never run `flux update` fails with a "run 'flux update' first" error rather than silently fetching on its own.
+
+Plain `flux update` only reports; `flux update -i` additionally force-reinstalls (`flux install -y -f`) every package it just reported - kotodama or Alpine alike - upgrading them to the version just synced.
+
+`flux update` does not touch flatpak - `flux install --flatpak <pkg>` is the only flatpak-aware path, and updating an installed flatpak app is left to `flatpak update` directly.
 
 ## kira-base updates (`flux base-update`)
 

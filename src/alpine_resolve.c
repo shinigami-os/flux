@@ -3,10 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "../include/alpine.h"
 #include "../include/util.h"
 
-int alpine_repos_load(const flux_config_t *config, const char *arch, alpine_repos_t *repos) {
+int alpine_repos_sync(const flux_config_t *config, const char *arch, alpine_repos_t *repos) {
     memset(repos, 0, sizeof(*repos));
 
     const char *names[2] = { "main", "community" };
@@ -19,6 +20,25 @@ int alpine_repos_load(const flux_config_t *config, const char *arch, alpine_repo
     }
 
     if (repos->main.count == 0 && repos->community.count == 0) return FLUX_ERR_NETWORK;
+    return FLUX_ERR_NONE;
+}
+
+int alpine_repos_load(const flux_config_t *config, const char *arch, alpine_repos_t *repos) {
+    (void)config;
+    memset(repos, 0, sizeof(*repos));
+
+    const char *names[2] = { "main", "community" };
+    alpine_index_t *slots[2] = { &repos->main, &repos->community };
+
+    for (int i = 0; i < 2; i++) {
+        char idx_path[512];
+        alpine_index_cache_path(names[i], arch, idx_path, sizeof(idx_path));
+        struct stat st;
+        if (stat(idx_path, &st) != 0) continue;
+        alpine_index_load(idx_path, slots[i]);
+    }
+
+    if (repos->main.count == 0 && repos->community.count == 0) return FLUX_ERR_CACHE;
     return FLUX_ERR_NONE;
 }
 

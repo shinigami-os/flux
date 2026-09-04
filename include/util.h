@@ -57,7 +57,7 @@ void flux_rule(void);                     // a full-width horizontal divider
 
 typedef struct {
     char col1[FLUX_MAX_NAME_LEN];
-    char col2[FLUX_MAX_VERSION_LEN * 2 + 8]; // wide enough for "old -> new" version pairs, not just a single version
+    char col2[104]; // wide enough for "old -> new" version pairs (Alpine's -rN versions run longer than kotodama's)
 } flux_table_row_t;
 
 // prints a bordered two-column table (e.g. package name / version)

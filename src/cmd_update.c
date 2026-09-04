@@ -14,10 +14,11 @@ static void check_for_flux_release(void);
 static void check_for_base_release(void);
 static void check_for_kernel_release(const flux_config_t *config);
 static void check_musl_soname(const flux_config_t *config);
-static void update_flatpak(void);
 static int  get_git_head(const char *repo_path, char *out, size_t outlen);
 static int  report_and_collect_updates(const flux_config_t *config, const char *old_head, const char *new_head,
                                         char outdated[][FLUX_MAX_NAME_LEN], int max, int *count);
+static void collect_alpine_updates(const alpine_repos_t *repos,
+                                    char outdated[][FLUX_MAX_NAME_LEN], int max, int *count);
 
 int flux_update(int argc, char **argv, const char *usage) {
     int install_updates = 0;
@@ -97,35 +98,50 @@ int flux_update(int argc, char **argv, const char *usage) {
     }
     flux_ok("recipe repo up to date");
 
+    char outdated[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int outdated_count = 0;
+
     if (have_old_head) {
         char new_head[64] = {0};
         if (get_git_head(config.local_repo_path, new_head, sizeof(new_head)) == FLUX_ERR_NONE &&
             strcmp(old_head, new_head) != 0) {
-
-            char outdated[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
-            int outdated_count = 0;
             report_and_collect_updates(&config, old_head, new_head, outdated, FLUX_MAX_INSTALL_QUEUE, &outdated_count);
-
-            if (outdated_count > 0) {
-                if (install_updates) {
-                    flux_action("Installing %d update%s", outdated_count, outdated_count == 1 ? "" : "s");
-                    for (int i = 0; i < outdated_count; i++) {
-                        char *install_argv[] = { "-y", "-f", outdated[i] };
-                        int err = flux_install(3, install_argv, "flux install [-y] [-f] <pkg>");
-                        if (err != FLUX_ERR_NONE)
-                            flux_err("failed to update '%s'", outdated[i]);
-                    }
-                } else {
-                    printf("\nRun 'flux update -i' to install %s.\n",
-                           outdated_count == 1 ? "it" : "them");
-                }
-            } else {
-                flux_ok("no installed packages have available updates");
-            }
         }
     }
 
-    update_flatpak();
+    char arch[ALPINE_MAX_ARCH_LEN];
+    alpine_repos_t alpine_repos;
+    int have_alpine_repos = 0;
+    if (alpine_arch_from_target(config.package_target, arch, sizeof(arch)) == FLUX_ERR_NONE) {
+        flux_step("syncing Alpine package index...");
+        if (alpine_repos_sync(&config, arch, &alpine_repos) == FLUX_ERR_NONE) {
+            have_alpine_repos = 1;
+            flux_ok("Alpine package index up to date");
+            collect_alpine_updates(&alpine_repos, outdated, FLUX_MAX_INSTALL_QUEUE, &outdated_count);
+        } else {
+            flux_warn("failed to sync Alpine package index");
+        }
+    }
+
+    if (outdated_count > 0) {
+        if (install_updates) {
+            flux_action("Installing %d update%s", outdated_count, outdated_count == 1 ? "" : "s");
+            for (int i = 0; i < outdated_count; i++) {
+                char *install_argv[] = { "-y", "-f", outdated[i] };
+                int err = flux_install(3, install_argv, "flux install [-y] [-f] <pkg>");
+                if (err != FLUX_ERR_NONE)
+                    flux_err("failed to update '%s'", outdated[i]);
+            }
+        } else {
+            printf("\nRun 'flux update -i' to install %s.\n",
+                   outdated_count == 1 ? "it" : "them");
+        }
+    } else {
+        flux_ok("no installed packages have available updates");
+    }
+
+    if (have_alpine_repos) alpine_repos_free(&alpine_repos);
+
     check_for_flux_release();
     check_for_base_release();
     check_for_kernel_release(&config);
@@ -207,10 +223,36 @@ static void check_musl_soname(const flux_config_t *config) {
         flux_warn("%s not found - Alpine packages will fail to resolve so:libc.musl-%s.so.1", path, arch);
 }
 
-static void update_flatpak(void) {
-    if (system("command -v flatpak >/dev/null 2>&1") != 0) return;
-    flux_step("updating flatpak apps...");
-    system("flatpak update -y");
+// compares each installed alpine-sourced package's recorded version against the just-synced index - "update available" should only mean something for packages on this system
+static void collect_alpine_updates(const alpine_repos_t *repos, char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    if (flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n) != FLUX_ERR_NONE) return;
+
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    int rows_count = 0;
+
+    for (int i = 0; i < n && *count < max; i++) {
+        flux_pkg_info_t info;
+        if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
+        if (strcmp(info.source, "alpine") != 0) continue; // empty/"kotodama" handled by the git-diff based check above
+
+        const alpine_pkg_t *p = alpine_repos_find_by_name(repos, names[i], NULL);
+        if (!p || strcmp(info.version, p->version) == 0) continue;
+
+        strncpy(rows[rows_count].col1, names[i], FLUX_MAX_NAME_LEN - 1);
+        snprintf(rows[rows_count].col2, sizeof(rows[rows_count].col2), "%s -> %s", info.version, p->version);
+        rows_count++;
+        strncpy(outdated[*count], names[i], FLUX_MAX_NAME_LEN - 1);
+        (*count)++;
+    }
+
+    if (rows_count > 0) {
+        char title[64];
+        snprintf(title, sizeof(title), "%d Alpine update%s available", rows_count, rows_count == 1 ? "" : "s");
+        printf("\n");
+        flux_print_table(title, rows, rows_count);
+    }
 }
 
 static void check_for_flux_release(void) {
