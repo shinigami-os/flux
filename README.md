@@ -1,7 +1,7 @@
 # flux
 > Package manager for Kira Linux.
 
-flux is a minimal, source-based package manager written in C. Single binary, no runtime dependencies beyond libc. Every package is built from source against a **kotodama** recipe; binaries are tracked, cached, and removable with full file-level precision.
+flux is a minimal package manager written in C: a single static binary that builds Kira's own software from source against **kotodama** recipes, and installs everything else natively from [Alpine Linux's package index](https://pkgs.alpinelinux.org/packages). Installed files are tracked and removable with full file-level precision, regardless of source.
 
 ---
 
@@ -12,7 +12,7 @@ flux is a minimal, source-based package manager written in C. Single binary, no 
 - **Dependency-minimal.** Build deps are only pulled in for a package that actually needs to compile from source. A package with a cache hit, or a meta-package, never drags its build toolchain along.
 - **Transparent.** Every operation prints what it is doing and why, with a consistent styled output (bold action headers, indented step lines, bordered tables for install/update queues) that respects `NO_COLOR` and non-tty output automatically. Downloads run through `flux_download()`, which silences curl's own meter and draws a live purple progress bar in its place instead.
 - **Scriptable.** Exit codes are stable and documented. flux works in shell scripts and CI pipelines.
-- **No runtime deps.** flux links only against libc. Nothing else required.
+- **No linked dependencies.** flux links only against libc - no libcurl, libarchive, or libssl. It shells out to `curl`, `tar`, `gzip`, `git`, `openssl`, `sha256sum`, and `minisign` for anything download/archive/crypto-shaped instead, the same way any of these would be invoked from a shell script, just from C. All of these already ship with Kira.
 - **Cross-compile aware.** `flux build --cross` builds against a configured cross sysroot instead of the host.
 
 ---
@@ -45,6 +45,18 @@ flux resolves every package name against one of two sources, decided purely by t
 - **everything else** - always resolved live against [Alpine Linux's package index](https://pkgs.alpinelinux.org/packages) (APKINDEX + `.apk`), natively parsed and verified by flux itself. No separate `apk` binary is ever shelled out to, and no local recipe is required.
 
 There is no fallback between the two - a missing `kira-*` recipe is just a "package not found" error. `flux install --flatpak <pkg>` installs via Flathub explicitly, bypassing both.
+
+`flux search` and `flux info` are kotodama-only for now - they read `flux-recipes` directly and never consult the Alpine index, so neither can describe an Alpine-only package that isn't already installed (`flux info` on an installed one still works, filling in what it can from the package database instead of a recipe).
+
+### Install safety
+
+Every `flux install` - one package or many, kotodama or Alpine - resolves the full dependency queue first and always shows a summary table (name, version) before asking to confirm, even for a single package with no extra dependencies. `-y` skips the prompt, not the resolution.
+
+A few refusals are load-bearing, not incidental:
+- **Provenance conflicts.** If an Alpine package would be installed under a name already tracked from a *different* source (kotodama's own `musl` vs Alpine's `musl`, for example), flux refuses rather than silently overwrite it. `-f` overrides this, with a loud warning even then.
+- **File conflicts.** Before copying an Alpine package's files onto `/`, flux checks every path against every other installed package's own file list. A collision aborts the install, naming both packages and the path.
+- **kira-base is never touched.** `musl` and `busybox` (kira-base's own bootstrap layer) are treated as always-satisfied dependencies and never queued for install, no matter what pulls them in.
+- **Post-install triggers are shown before they run.** An Alpine package with a `.pre-install`/`.post-install`/`.trigger` script prints the script body and asks for explicit confirmation before executing it as root - this is third-party code, unlike a kotodama recipe's own `%post-install`.
 
 ## kotodama recipe format
 
@@ -173,7 +185,7 @@ Compiler flags: `-Wall -Wextra -pedantic -std=c11`
 | 6 | `FLUX_ERR_CACHE` | Cache error |
 | 7 | `FLUX_ERR_NETWORK` | Network error |
 | 8 | `FLUX_ERR_PERMISSION` | Permission error (needs root) |
-| 9 | `FLUX_ERR_CONTAINER` | Compat container error |
+| 9 | `FLUX_ERR_CONTAINER` | Reserved, currently unused |
 | 10 | `FLUX_ERR_SOURCE` | Invalid or unavailable source |
 | 11 | `FLUX_ERR_KOTODAMA` | Malformed recipe file |
 
@@ -214,7 +226,9 @@ The Shinigami kernel is versioned as `<linux-version>-shinigami-<shinigami-versi
 
 ## Status
 
-Phase 3. `install`, `remove`, `autoremove`, `search`, `update`, `info`, `list`, `build`, `cache`, `version`, `self-update`, `base-update`, `kernel-update` are fully working, including cross-compilation, real per-package dependency resolution, a local + remote binary cache, and a fully-implemented auto-installed/orphan tracking model.
+`install`, `remove`, `autoremove`, `update`, `list`, `build`, `version`, `self-update`, `base-update`, `kernel-update` are fully working against both sources (kotodama and Alpine), including cross-compilation, mixed-source dependency resolution, a local + remote binary cache for kotodama builds, and a fully-implemented auto-installed/orphan tracking model.
+
+Known gaps: `search`/`info` only see kotodama recipes, not the Alpine index; `flux cache` is a stub (every subcommand just prints a placeholder).
 
 See the [Kira Linux specification](https://github.com/shinigami-os) and the full project roadmap.
 
