@@ -82,8 +82,12 @@ const alpine_pkg_t *alpine_repos_find_provider(const alpine_repos_t *repos, cons
 
 #define ALPINE_MAX_RESOLVED_DEPS 128
 
-// resolves one package's D: tokens to concrete package names (so:/cmd:/pc: capabilities included); "!pkg" conflict tokens go to conflicts_out instead
+// resolves one package's D: tokens to concrete package names (so:/cmd:/pc: capabilities included); "!pkg" conflict tokens go to conflicts_out instead.
+// already_selected is every package this whole install has already committed to elsewhere in the dependency graph (siblings included, not just
+// ancestors) - a so:/cmd:/pc: token already satisfied by one of them reuses it instead of independently picking a different, possibly conflicting
+// provider of the same capability (Alpine's own alternative-library packages, e.g. polkit-elogind-libs vs polkit-noelogind-libs, rely on exactly this)
 int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
+                         const char already_selected[][ALPINE_MAX_NAME_LEN], int already_selected_count,
                          char names_out[][ALPINE_MAX_NAME_LEN], int max_names, int *names_count,
                          char conflicts_out[][ALPINE_MAX_NAME_LEN], int max_conflicts, int *conflicts_count);
 

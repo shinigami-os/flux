@@ -28,8 +28,11 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
                                char *owner_out, size_t owner_outlen,
                                char *colliding_path_out, size_t path_outlen);
 
-// runs body as a temp shell script (optionally preceded by env_prefix); shared by kotodama's %post-install and Alpine's trigger scripts
-int flux_run_script(const char *body, const char *env_prefix);
+// runs body as a temp shell script (optionally preceded by env_prefix); shared by kotodama's %post-install and Alpine's trigger scripts.
+// strict_errors adds "set -e" - correct for kotodama hooks (documented, authored by us), wrong for Alpine's third-party
+// pre/post-install scripts, which rely on their own "2>/dev/null" idempotent-failure idiom (e.g. "addgroup already exists")
+// and would abort partway through under set -e even though they're written to tolerate exactly that
+int flux_run_script(const char *body, const char *env_prefix, int strict_errors);
 
 int flux_native_target(char *out, size_t outlen);
 int flux_is_archive_name(const char *name);

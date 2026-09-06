@@ -100,6 +100,7 @@ const alpine_pkg_t *alpine_repos_find_provider(const alpine_repos_t *repos, cons
 }
 
 int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
+                         const char already_selected[][ALPINE_MAX_NAME_LEN], int already_selected_count,
                          char names_out[][ALPINE_MAX_NAME_LEN], int max_names, int *names_count,
                          char conflicts_out[][ALPINE_MAX_NAME_LEN], int max_conflicts, int *conflicts_count) {
     *names_count = 0;
@@ -128,6 +129,23 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
 
         const alpine_pkg_t *provider = NULL;
         if (strncmp(bare, "so:", 3) == 0 || strncmp(bare, "cmd:", 4) == 0 || strncmp(bare, "pc:", 3) == 0) {
+            // a package can list both an exact alternative (e.g. "polkit-noelogind-libs") and the
+            // generic capability it already provides (e.g. "so:libpolkit-gobject-1.so.0") in the same
+            // D: line - if an earlier token in this list already selected a provider for this capability,
+            // reuse it instead of independently picking a *different* (and possibly conflicting) one
+            int already_satisfied = 0;
+            for (int j = 0; j < *names_count && !already_satisfied; j++) {
+                const alpine_pkg_t *existing = alpine_repos_find_by_name(repos, names_out[j], NULL);
+                if (existing && provides_matches(existing->provides_raw, bare)) already_satisfied = 1;
+            }
+            // also check every package already committed elsewhere in this install's dependency graph -
+            // a sibling dependency processed before this one can already have claimed the same capability
+            for (int j = 0; j < already_selected_count && !already_satisfied; j++) {
+                const alpine_pkg_t *existing = alpine_repos_find_by_name(repos, already_selected[j], NULL);
+                if (existing && provides_matches(existing->provides_raw, bare)) already_satisfied = 1;
+            }
+            if (already_satisfied) continue;
+
             provider = alpine_repos_find_provider(repos, bare, NULL);
         } else {
             provider = alpine_repos_find_by_name(repos, bare, NULL);

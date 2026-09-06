@@ -483,14 +483,14 @@ int flux_is_kira_pkg(const char *name) {
     return strncmp(name, "kira-", 5) == 0;
 }
 
-int flux_run_script(const char *body, const char *env_prefix) {
+int flux_run_script(const char *body, const char *env_prefix, int strict_errors) {
     if (!body || strlen(body) == 0) return 0;
 
     system("mkdir -p /tmp/flux-build");
     const char *script_path = "/tmp/flux-build/.flux_script.sh";
     FILE *f = fopen(script_path, "w");
     if (!f) return FLUX_ERR_GENERAL;
-    fprintf(f, "#!/bin/sh\nset -e\n%s%s\n", env_prefix ? env_prefix : "", body);
+    fprintf(f, "#!/bin/sh\n%s%s%s\n", strict_errors ? "set -e\n" : "", env_prefix ? env_prefix : "", body);
     fclose(f);
     chmod(script_path, 0755);
 

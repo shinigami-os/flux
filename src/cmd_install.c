@@ -142,7 +142,7 @@ static int run_post_install_hook(const char *hook, const char *recipe_dir) {
     flux_step("running post-install...");
     char env_prefix[FLUX_MAX_PATH_LEN + 32];
     snprintf(env_prefix, sizeof(env_prefix), "export FLUX_RECIPE_DIR=\"%s\"\n", recipe_dir);
-    return flux_run_script(hook, env_prefix);
+    return flux_run_script(hook, env_prefix, 1);
 }
 
 static int run_hook(const char *hook, const char *build_dir, const char *destdir, const char *recipe_dir) {
@@ -185,6 +185,10 @@ typedef struct {
     int repos_loaded;
     char forbidden[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
     int forbidden_count;
+    // every package this whole install has committed to resolving a so:/cmd:/pc: capability against so far,
+    // across the entire dependency graph, not just one package's own D: line - see alpine_resolve_deps()
+    char claimed_providers[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int claimed_count;
 } collect_ctx_t;
 
 static int ensure_alpine_repos(collect_ctx_t *ctx) {
@@ -237,8 +241,21 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         int dep_count = 0;
         char conflicts[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
         int conflict_count = 0;
-        alpine_resolve_deps(&ctx->repos, p, dep_names, ALPINE_MAX_RESOLVED_DEPS, &dep_count,
+        alpine_resolve_deps(&ctx->repos, p, (const char (*)[ALPINE_MAX_NAME_LEN])ctx->claimed_providers, ctx->claimed_count,
+                             dep_names, ALPINE_MAX_RESOLVED_DEPS, &dep_count,
                              conflicts, ALPINE_MAX_RESOLVED_DEPS, &conflict_count);
+
+        // register every sibling this package's own D: line just resolved to *before* recursing into any of
+        // them, so a sibling's own capability tokens (e.g. polkit-common needing so:libpolkit-gobject-1.so.0)
+        // see that another sibling (polkit-noelogind-libs) already claimed it, even though that sibling
+        // hasn't been recursed into yet
+        for (int i = 0; i < dep_count; i++) {
+            int already_claimed = 0;
+            for (int j = 0; j < ctx->claimed_count; j++)
+                if (strcmp(ctx->claimed_providers[j], dep_names[i]) == 0) { already_claimed = 1; break; }
+            if (!already_claimed && ctx->claimed_count < FLUX_MAX_INSTALL_QUEUE)
+                strncpy(ctx->claimed_providers[ctx->claimed_count++], dep_names[i], FLUX_MAX_NAME_LEN - 1);
+        }
 
         for (int i = 0; i < conflict_count; i++) {
             if (queue_contains(queue, conflicts[i])) {

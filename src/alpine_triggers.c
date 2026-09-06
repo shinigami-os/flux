@@ -41,5 +41,5 @@ int alpine_read_trigger_script(const char *control_extract_dir, const char *scri
 }
 
 int alpine_run_trigger_script(const char *body) {
-    return flux_run_script(body, NULL);
+    return flux_run_script(body, NULL, 0);
 }
