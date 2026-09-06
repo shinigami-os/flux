@@ -8,7 +8,7 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return FLUX_ERR_KOTODAMA;
 
-    char line[512];
+    char line[2048];
     koto_state_t state = KOTO_NONE;
     int bdep_i = 0;
     int rdep_i = 0;
@@ -90,7 +90,7 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
         }
         if (state == KOTO_DEPS) {
             if (strcmp(key, "build") == 0) {
-                char tmp[512];
+                char tmp[2048];
                 strncpy(tmp, val, sizeof(tmp) - 1);
                 tmp[sizeof(tmp) - 1] = '\0';
                 char *tok = strtok(tmp, " ");
@@ -102,7 +102,7 @@ int parse_kotodama(flux_recipe_t *recipe, const char *path) {
                     flux_warn("'%s' has more than %d build deps, '%s' and later were dropped - raise FLUX_MAX_DEPS", recipe->name, FLUX_MAX_DEPS, tok);
             }
             if (strcmp(key, "runtime") == 0) {
-                char tmp[512];
+                char tmp[2048];
                 strncpy(tmp, val, sizeof(tmp) - 1);
                 tmp[sizeof(tmp) - 1] = '\0';
                 char *tok = strtok(tmp, " ");
