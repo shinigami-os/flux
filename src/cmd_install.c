@@ -615,12 +615,13 @@ static int confirm_queue(flux_install_queue_t *queue) {
 // installs a resolved queue in order, recursing per entry so each re-routes through the kira-*/Alpine check
 static int install_resolved_queue(flux_install_queue_t *queue, alpine_repos_t *repos) {
     int saved_force = g_force;
-    g_force = 0; // deps are never force-reinstalled, only the root package is
     g_active_repos = repos;
     int overall_err = FLUX_ERR_NONE;
 
     for (int i = 0; i < queue->count; i++) {
-        g_auto_installed = (i < queue->count - 1) ? 1 : 0;
+        int is_root = (i == queue->count - 1);
+        g_auto_installed = is_root ? 0 : 1;
+        g_force = is_root ? saved_force : 0; // deps are never force-reinstalled, only the root package is
         g_skip_deps = 1;
         char *one_argv[] = { queue->pkgs[i].name };
         int err = flux_install(1, one_argv, "flux install <pkg>");
