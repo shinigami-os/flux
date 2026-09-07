@@ -13,7 +13,9 @@ build:
 build/flux: $(OBJS) | build
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) -o build/flux
 
-build/%.o : src/%.c | build
+HEADERS = include/alpine.h include/flux.h include/parser.h include/util.h
+
+build/%.o : src/%.c $(HEADERS) | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
