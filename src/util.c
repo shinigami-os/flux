@@ -127,6 +127,33 @@ int flux_db_is_installed(const char *name) {
     return stat(dir, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+// true if another still-installed package (not `name`) also lists `path` as one of its own files -
+// e.g. gcc and libgcc both legitimately ship usr/lib/libgcc_s.so, removing one must not take it from the other
+static int file_owned_by_another_package(const char *path, const char *name) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int name_count = 0;
+    flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &name_count);
+
+    for (int i = 0; i < name_count; i++) {
+        if (strcmp(names[i], name) == 0) continue;
+
+        char files_path[FLUX_MAX_PATH_LEN + 8];
+        snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", names[i]);
+        FILE *f = fopen(files_path, "r");
+        if (!f) continue;
+
+        char line[FLUX_MAX_PATH_LEN];
+        int found = 0;
+        while (fgets(line, sizeof(line), f)) {
+            strip_newline(line);
+            if (strcmp(line, path) == 0) { found = 1; break; }
+        }
+        fclose(f);
+        if (found) return 1;
+    }
+    return 0;
+}
+
 int flux_db_remove(const char *name) {
     char dir[FLUX_MAX_PATH_LEN];
     char info_path[FLUX_MAX_PATH_LEN + 8];
@@ -141,7 +168,7 @@ int flux_db_remove(const char *name) {
         char line[512];
         while (fgets(line, sizeof(line), f)) {
             strip_newline(line);
-            if (strlen(line) > 0) remove(line);
+            if (strlen(line) > 0 && !file_owned_by_another_package(line, name)) remove(line);
         }
         fclose(f);
     }
