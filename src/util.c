@@ -410,7 +410,13 @@ int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const 
     return 0;
 }
 
-int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count,
+static int files_are_identical(const char *a, const char *b) {
+    char cmd[FLUX_MAX_PATH_LEN * 2 + 32];
+    snprintf(cmd, sizeof(cmd), "cmp -s \"%s\" \"%s\"", a, b);
+    return system(cmd) == 0;
+}
+
+int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count, const char *staged_destdir,
                                char *owner_out, size_t owner_outlen,
                                char *colliding_path_out, size_t path_outlen) {
     char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
@@ -431,6 +437,9 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
             if (line[0] == '\0') continue;
             for (int j = 0; j < path_count; j++) {
                 if (strcmp(line, paths[j]) == 0) {
+                    char staged_path[FLUX_MAX_PATH_LEN * 2];
+                    snprintf(staged_path, sizeof(staged_path), "%s%s", staged_destdir, paths[j]);
+                    if (files_are_identical(line, staged_path)) continue;
                     fclose(f);
                     strncpy(owner_out, names[i], owner_outlen - 1);
                     strncpy(colliding_path_out, line, path_outlen - 1);

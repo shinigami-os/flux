@@ -23,8 +23,12 @@ int flux_autoremove_orphans(int *removed_count);
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
 int flux_is_kira_pkg(const char *name);
 
-// true if any of `paths` is already owned by another installed package (pkg's own prior files don't count); fills owner_out/colliding_path_out on collision
-int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count,
+// true if any of `paths` is already owned by another installed package (pkg's own prior files don't count) with
+// different content than the incoming one - matching apk's own tolerance, two packages legitimately shipping the
+// same byte-identical file (e.g. mariadb-dev and mariadb-connector-c-dev's shared client headers) isn't a conflict.
+// staged_destdir is where the incoming files were already extracted to, so their content is available to compare.
+// fills owner_out/colliding_path_out on collision
+int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count, const char *staged_destdir,
                                char *owner_out, size_t owner_outlen,
                                char *colliding_path_out, size_t path_outlen);
 

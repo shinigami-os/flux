@@ -490,7 +490,7 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
 
     // checked, and any trigger scripts surfaced, BEFORE anything touches the real root
     char conflict_owner[FLUX_MAX_NAME_LEN], conflict_path[FLUX_MAX_PATH_LEN];
-    if (flux_check_file_conflicts(found.name, file_ptrs, file_count,
+    if (flux_check_file_conflicts(found.name, file_ptrs, file_count, destdir,
                                    conflict_owner, sizeof(conflict_owner),
                                    conflict_path, sizeof(conflict_path)) != FLUX_ERR_NONE) {
         flux_err("'%s' conflicts with already-installed '%s' over %s", found.name, conflict_owner, conflict_path);
