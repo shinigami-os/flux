@@ -237,6 +237,21 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         // kira-base's bootstrap layer (musl, static busybox, ...) is never flux-managed - already satisfied, not installable
         if (strcmp(real_name, "musl") == 0 || strcmp(real_name, "busybox") == 0) return FLUX_ERR_NONE;
 
+        // claim real_name itself *before* resolving its own deps, not just what it resolves to - a
+        // package requested directly by name (e.g. "polkit-elogind-libs" from a recipe's own runtime=
+        // line) never otherwise lands in claimed_providers, since that only ever recorded a package's
+        // *resolved dependencies*, never the package being processed. Without this, a sibling elsewhere
+        // in the same graph whose own D: line asks for the bare virtual capability this package provides
+        // (e.g. "polkit-libs") re-resolves it independently and can pick a conflicting alternative
+        // (e.g. "polkit-noelogind-libs") even though one is already committed to.
+        {
+            int already_claimed = 0;
+            for (int j = 0; j < ctx->claimed_count; j++)
+                if (strcmp(ctx->claimed_providers[j], real_name) == 0) { already_claimed = 1; break; }
+            if (!already_claimed && ctx->claimed_count < FLUX_MAX_INSTALL_QUEUE)
+                strncpy(ctx->claimed_providers[ctx->claimed_count++], real_name, FLUX_MAX_NAME_LEN - 1);
+        }
+
         char dep_names[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
         int dep_count = 0;
         char conflicts[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
