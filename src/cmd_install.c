@@ -421,7 +421,13 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     if (flux_db_is_installed(found.name)) {
         flux_pkg_info_t info;
         if (flux_db_read_info(found.name, &info) == FLUX_ERR_NONE && strcmp(info.source, "alpine") != 0) {
-            // same name, different provenance (e.g. kotodama's own "musl" vs Alpine's "musl") - not a safe self-upgrade
+            // same name, different provenance (e.g. kotodama's own "musl" vs Alpine's "musl") - not a safe self-upgrade.
+            // a dependency just needs *something* satisfying the name already there, not specifically the Alpine
+            // build of it - only the package the user actually asked for should ever require -f to cross provenance
+            if (g_auto_installed) {
+                flux_step("'%s' already satisfied by the installed %s package, skipping the Alpine one", found.name, info.source);
+                return FLUX_ERR_NONE;
+            }
             if (!g_force) {
                 flux_err("'%s' is already installed from %s, not alpine - refusing to replace it silently (use -f to override)", found.name, info.source);
                 return FLUX_ERR_GENERAL;
