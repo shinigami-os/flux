@@ -80,23 +80,37 @@ static int provides_matches(const char *provides_raw, const char *bare_token) {
     return 0;
 }
 
+// a capability can have more than one provider (e.g. polkit-elogind-libs vs polkit-noelogind-libs
+// both provide "polkit-libs") - prefer whichever one is already installed on disk, since that's a
+// choice a *previous*, separate `flux install` invocation already committed to; without this, two
+// installs of the same system can each pick a different alternative and conflict on shared files.
+// Only falls back to the first index match (old behavior) when none of them are installed yet.
 static const alpine_pkg_t *find_provider_in(const alpine_index_t *idx, const char *bare_token, const char **out_repo, const char *repo_name) {
+    const alpine_pkg_t *first = NULL;
     for (int i = 0; i < idx->count; i++) {
-        if (provides_matches(idx->pkgs[i].provides_raw, bare_token)) {
+        if (!provides_matches(idx->pkgs[i].provides_raw, bare_token)) continue;
+        if (!first) first = &idx->pkgs[i];
+        if (flux_db_is_installed(idx->pkgs[i].name)) {
             if (out_repo) *out_repo = repo_name;
             return &idx->pkgs[i];
         }
     }
-    return NULL;
+    if (first && out_repo) *out_repo = repo_name;
+    return first;
 }
 
 const alpine_pkg_t *alpine_repos_find_provider(const alpine_repos_t *repos, const char *capability_token, const char **out_repo) {
     char bare[ALPINE_MAX_DEP_TOKEN_LEN];
     strip_constraint(capability_token, bare, sizeof(bare));
 
-    const alpine_pkg_t *p = find_provider_in(&repos->main, bare, out_repo, "main");
-    if (p) return p;
-    return find_provider_in(&repos->community, bare, out_repo, "community");
+    const alpine_pkg_t *main_match = find_provider_in(&repos->main, bare, out_repo, "main");
+    if (main_match && flux_db_is_installed(main_match->name)) return main_match;
+
+    const alpine_pkg_t *community_match = find_provider_in(&repos->community, bare, out_repo, "community");
+    if (community_match && flux_db_is_installed(community_match->name)) return community_match;
+
+    if (main_match) { if (out_repo) *out_repo = "main"; return main_match; }
+    return community_match;
 }
 
 int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
@@ -128,11 +142,18 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
         if (bare[0] == '\0') continue;
 
         const alpine_pkg_t *provider = NULL;
-        if (strncmp(bare, "so:", 3) == 0 || strncmp(bare, "cmd:", 4) == 0 || strncmp(bare, "pc:", 3) == 0) {
-            // a package can list both an exact alternative (e.g. "polkit-noelogind-libs") and the
-            // generic capability it already provides (e.g. "so:libpolkit-gobject-1.so.0") in the same
-            // D: line - if an earlier token in this list already selected a provider for this capability,
-            // reuse it instead of independently picking a *different* (and possibly conflicting) one
+        // an exact package name always wins outright, whether or not it's also a capability
+        // token (so:/cmd:/pc: are never real package names, so skip this for those)
+        if (strncmp(bare, "so:", 3) != 0 && strncmp(bare, "cmd:", 4) != 0 && strncmp(bare, "pc:", 3) != 0)
+            provider = alpine_repos_find_by_name(repos, bare, NULL);
+
+        if (!provider) {
+            // this is a capability/virtual name with more than one possible provider (e.g. bare
+            // "polkit-libs", or "so:libpolkit-gobject-1.so.0") - a package can list both an exact
+            // alternative (e.g. "polkit-noelogind-libs") and the generic capability it already
+            // provides in the same D: line, or a *different* package can independently depend on
+            // the same virtual name - either way, if something already selected a provider for it,
+            // reuse that one instead of picking a different (and possibly conflicting) alternative
             int already_satisfied = 0;
             for (int j = 0; j < *names_count && !already_satisfied; j++) {
                 const alpine_pkg_t *existing = alpine_repos_find_by_name(repos, names_out[j], NULL);
@@ -147,9 +168,6 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
             if (already_satisfied) continue;
 
             provider = alpine_repos_find_provider(repos, bare, NULL);
-        } else {
-            provider = alpine_repos_find_by_name(repos, bare, NULL);
-            if (!provider) provider = alpine_repos_find_provider(repos, bare, NULL);
         }
 
         if (!provider) {
