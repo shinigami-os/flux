@@ -365,10 +365,16 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
     return FLUX_ERR_NONE;
 }
 
-// one atomic "cp -a destdir/. /" - a per-file "find | while read; do cp; done" loop let one failed cp go unnoticed in practice, since a failing command inside a piped while-read subshell doesn't reliably abort the pipeline on every /bin/sh
+// one atomic tar pipe rather than "cp -a destdir/. /" - a per-file "find | while read; do cp; done"
+// loop let one failed cp go unnoticed in practice, since a failing command inside a piped while-read
+// subshell doesn't reliably abort the pipeline on every /bin/sh. cp -a itself isn't safe either: busybox's
+// cp treats an existing destination that's a symlink-to-directory (e.g. Kira's own /var/run -> /run) as
+// "not a directory" and refuses to recurse into it, even though the source ships a real directory at that
+// path - tar extraction walks the real filesystem at each path component instead, so it follows the
+// symlink correctly, the same way apk's own package installs do
 static int copy_destdir_to_root(const char *destdir) {
-    char cmd[600];
-    snprintf(cmd, sizeof(cmd), "cp -a \"%s\"/. /", destdir);
+    char cmd[700];
+    snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | tar -C / -xpf -", destdir);
     return system(cmd) == 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
 }
 
