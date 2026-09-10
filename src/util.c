@@ -286,7 +286,10 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     char remote_url[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN];
     snprintf(remote_url, sizeof(remote_url), "%s/packages/%s.tar.zst", config.binary_cache_url, key);
     char check_cmd[FLUX_MAX_URL_LEN + FLUX_MAX_PATH_LEN + 64];
-    snprintf(check_cmd, sizeof(check_cmd), "curl -s -o /dev/null -f --head \"%s\"", remote_url);
+    // this runs once per from-source package during collection, all in quick succession - a bare,
+    // un-retried HEAD request treats one transient hiccup as a hard cache miss, which then pulls in
+    // that package's whole build-dep chain even though the later real install finds the cache fine
+    snprintf(check_cmd, sizeof(check_cmd), "curl -s -o /dev/null -f --head --retry 3 --retry-delay 1 --connect-timeout 5 \"%s\"", remote_url);
     if (system(check_cmd) != 0) return FLUX_ERR_NOT_FOUND;
 
     flux_step("remote cache hit, downloading...");
