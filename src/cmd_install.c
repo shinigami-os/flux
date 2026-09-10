@@ -324,15 +324,11 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
     } else {
         char cache_key[256];
         char cache_path[FLUX_MAX_PATH_LEN];
-        char native_target[64];
-        const char *cache_target;
         memset(cache_key, 0, sizeof(cache_key));
-        if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
-            cache_target = native_target;
-        } else {
-            cache_target = config->package_target;
-        }
-        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+        // flux install is always a native operation (cross builds only happen via the separate
+        // `flux build --cross` path) - passing NULL here keeps the key stable across machines and
+        // across gcc updates, instead of baking in gcc -dumpmachine's own build-specific triplet
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, NULL, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             needs_build_deps = (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) != FLUX_ERR_NONE);
         } else {
             needs_build_deps = 1;
@@ -798,14 +794,10 @@ int flux_install(int argc, char **argv, const char *usage) {
     int cache_hit = 0;
 
     if (has_source) {
-        char native_target[64];
-        const char *cache_target;
-        if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
-            cache_target = native_target;
-        } else {
-            cache_target = config.package_target;
-        }
-        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
+        // NULL target: flux install is always native, and gcc -dumpmachine's output here would
+        // otherwise depend on whether gcc itself happens to be installed *yet* at this exact point
+        // in the sequence - see the matching comment in collect_deps() above
+        if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, NULL, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE) {
             if (flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
                 flux_step("cache hit: %s", cache_path);
                 if (flux_cache_verify(cache_path, config.flux_pub_path) == FLUX_ERR_NONE) {
@@ -1197,14 +1189,6 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     }
     printf("\n");
 
-    char native_target[64];
-    const char *cache_target;
-    if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
-        cache_target = native_target;
-    } else {
-        cache_target = config->package_target;
-    }
-
     flux_download_item_t downloads[FLUX_MAX_INSTALL_QUEUE];
     int download_count = 0;
     for (int i = 0; i < queue.count; i++) {
@@ -1223,7 +1207,7 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         char cache_key[256];
         char cache_path[FLUX_MAX_PATH_LEN];
         memset(cache_key, 0, sizeof(cache_key));
-        if (flux_cache_key(r.name, r.version, r.cflags, cache_target, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE &&
+        if (flux_cache_key(r.name, r.version, r.cflags, NULL, cache_key, sizeof(cache_key)) == FLUX_ERR_NONE &&
             flux_cache_lookup(cache_key, cache_path, sizeof(cache_path)) == FLUX_ERR_NONE) {
             continue; // cached already, nothing to fetch
         }

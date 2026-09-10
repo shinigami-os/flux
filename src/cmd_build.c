@@ -63,15 +63,10 @@ int flux_build(int argc, char **argv, const char *usage) {
     memset(cache_key, 0, sizeof(cache_key));
     char cache_path[FLUX_MAX_PATH_LEN];
     if (!is_meta) {
-        char native_target[64];
-        const char *cross_target;
-        if (cross) {
-            cross_target = "x86_64-linux-musl";
-        } else if (flux_native_target(native_target, sizeof(native_target)) == FLUX_ERR_NONE) {
-            cross_target = native_target;
-        } else {
-            cross_target = config.package_target;
-        }
+        // only a real cross build should fold target into the key - for a native build, gcc
+        // -dumpmachine's output depends on the exact gcc version/build and on whether gcc even
+        // happens to be installed yet at this point, so it silently drifts the key between machines
+        const char *cross_target = cross ? "x86_64-linux-musl" : NULL;
         if (flux_cache_key(recipe.name, recipe.version, recipe.cflags, cross_target, cache_key, sizeof(cache_key)) != FLUX_ERR_NONE) {
             flux_err("failed to compute cache key");
             return FLUX_ERR_GENERAL;
