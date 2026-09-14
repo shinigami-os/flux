@@ -538,6 +538,22 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
     return FLUX_ERR_NONE;
 }
 
+// Tools flux's own C code shells out to for its core operations (fetching,
+// signature verification, packaging) - these aren't a "dependency" of any
+// installed package from apk/kotodama's point of view, since flux invokes
+// them directly rather than linking against them, so the dependency-graph
+// walk above can never protect them on its own. Removing curl broke every
+// future flux update/install outright (no way to fetch anything); openssl
+// verifies every Alpine package signature and minisign every kira-* one.
+static int flux_pkg_is_protected(const char *name) {
+    static const char *protected_pkgs[] = {
+        "curl", "openssl", "minisign", "tar", "git", "sha256sum", NULL
+    };
+    for (int i = 0; protected_pkgs[i]; i++)
+        if (strcmp(name, protected_pkgs[i]) == 0) return 1;
+    return 0;
+}
+
 int flux_autoremove_orphans(int *removed_count, int dry_run) {
     *removed_count = 0;
 
@@ -576,6 +592,7 @@ int flux_autoremove_orphans(int *removed_count, int dry_run) {
             flux_pkg_info_t info;
             if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
             if (!info.auto_installed) continue;
+            if (flux_pkg_is_protected(names[i])) continue;
 
             int needed = 0;
             for (int j = 0; j < count; j++) {
