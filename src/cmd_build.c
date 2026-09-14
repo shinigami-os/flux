@@ -49,7 +49,10 @@ int flux_build(int argc, char **argv, const char *usage) {
     memset(&recipe, 0, sizeof(recipe));
     if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return FLUX_ERR_KOTODAMA;
 
-    int is_meta = (strlen(recipe.url) == 0);
+    // a recipe with no [source] url can still have a real %build hook (e.g. one
+    // that self-fetches several sources directly) - only skip build/pre/post-build
+    // when there's truly nothing to compile
+    int is_meta = (strlen(recipe.url) == 0 && strlen(recipe.hook_build) == 0);
 
     // nothing to do, checked before any cache lookup
     if (is_meta && strlen(recipe.hook_install) == 0) {
