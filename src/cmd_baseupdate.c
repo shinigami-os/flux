@@ -256,9 +256,9 @@ int flux_base_update(int argc, char **argv, const char *usage) {
     snprintf(cmd, sizeof(cmd), "rm -rf \"%s\" && mkdir -p \"%s\"", scratch, scratch);
     system(cmd);
 
-    flux_step("downloading rootfs.tar.gz...");
-    if (download_signed(config.binary_cache_url, version, "rootfs.tar.gz", scratch, config.flux_pub_path) != FLUX_ERR_NONE) {
-        flux_err("failed to fetch or verify rootfs.tar.gz");
+    flux_step("downloading rootfs.tar.xz...");
+    if (download_signed(config.binary_cache_url, version, "rootfs.tar.xz", scratch, config.flux_pub_path) != FLUX_ERR_NONE) {
+        flux_err("failed to fetch or verify rootfs.tar.xz");
         return FLUX_ERR_NETWORK;
     }
 
@@ -270,9 +270,9 @@ int flux_base_update(int argc, char **argv, const char *usage) {
 
     char rootfs_dir[FLUX_MAX_PATH_LEN];
     snprintf(rootfs_dir, sizeof(rootfs_dir), "%s/rootfs", scratch);
-    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -xzf \"%s/rootfs.tar.gz\" -C \"%s\"", rootfs_dir, scratch, rootfs_dir);
+    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && tar -xJf \"%s/rootfs.tar.xz\" -C \"%s\"", rootfs_dir, scratch, rootfs_dir);
     if (system(cmd) != 0) {
-        flux_err("failed to extract rootfs.tar.gz");
+        flux_err("failed to extract rootfs.tar.xz");
         return FLUX_ERR_GENERAL;
     }
 
