@@ -854,7 +854,7 @@ int flux_download(const char *url, const char *dest) {
     const char *purple = flux_colors_enabled() ? "\033[38;2;170;0;255m" : "";
     const char *reset = flux_colors_enabled() ? "\033[0m" : "";
 
-    if (!tty) printf("  \xe2\x86\x93 %s\n", base); // ↓
+    if (!tty) { printf("  \xe2\x86\x93 %s\n", base); fflush(stdout); } // ↓
     remove(dest); // a stale leftover at dest would otherwise flash 100% for one frame before curl truncates it
 
     pid_t pid = fork();
@@ -932,10 +932,11 @@ int flux_download_batch(const flux_download_item_t *items, int count) {
     long done_bytes = 0;
 
     printf("Downloading %d packages...\n", count);
+    fflush(stdout);
     for (int i = 0; i < count; i++) {
         const char *base = strrchr(items[i].dest, '/');
         base = base ? base + 1 : items[i].dest;
-        if (!tty) printf("  \xe2\x86\x93 %s (%d/%d)\n", base, i + 1, count); // ↓
+        if (!tty) { printf("  \xe2\x86\x93 %s (%d/%d)\n", base, i + 1, count); fflush(stdout); } // ↓
         remove(items[i].dest);
 
         pid_t pid = fork();
@@ -1008,6 +1009,7 @@ void flux_batch_progress_advance(const char *name) {
     g_bp_index++;
     if (!isatty(STDOUT_FILENO)) {
         printf("  (%d/%d) %s\n", g_bp_index, g_bp_total, name);
+        fflush(stdout);
         return;
     }
     const char *purple = flux_colors_enabled() ? "\033[38;2;170;0;255m" : "";
