@@ -444,7 +444,14 @@ int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count)
     return FLUX_ERR_NONE;
 }
 
-int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const flux_config_t *config) {
+// Only checks runtime= deps, not build= - a package's build deps are a
+// one-time need already satisfied by the time it's sitting installed, not
+// an ongoing reason to keep anything else around. This is autoremove's only
+// caller, and treating build= as equally permanent was the actual reason
+// gcc/cmake/ninja/every -dev package a from-source kira-* build pulls in
+// never got cleaned up: the consuming package's own recipe always lists
+// them, so the old check considered them "needed" forever.
+int flux_recipe_runtime_depends_on(const char *recipe_name, const char *dep_name, const flux_config_t *config) {
     char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, recipe_name);
 
@@ -452,8 +459,6 @@ int flux_recipe_depends_on(const char *recipe_name, const char *dep_name, const 
     memset(&recipe, 0, sizeof(recipe));
     if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return 0;
 
-    for (int i = 0; i < FLUX_MAX_DEPS; i++)
-        if (strcmp(recipe.deps[i], dep_name) == 0) return 1;
     for (int i = 0; i < FLUX_MAX_RDEPS; i++)
         if (strcmp(recipe.rdeps[i], dep_name) == 0) return 1;
     return 0;
@@ -523,7 +528,7 @@ int flux_autoremove_orphans(int *removed_count) {
             int needed = 0;
             for (int j = 0; j < count; j++) {
                 if (j == i) continue;
-                if (flux_recipe_depends_on(names[j], names[i], &config)) { needed = 1; break; }
+                if (flux_recipe_runtime_depends_on(names[j], names[i], &config)) { needed = 1; break; }
             }
             if (needed) continue;
 
