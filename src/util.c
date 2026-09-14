@@ -314,11 +314,30 @@ int flux_cache_lookup(const char *key, char *path_out, size_t path_outlen) {
     return FLUX_ERR_NONE;
 }
 
+// Neither debug symbols nor static archives are ever needed on an installed
+// system - only while building or linking other software from source - so
+// every from-source package pays for them permanently for no runtime benefit.
+// --strip-unneeded is the safe choice: it drops debug info and local symbols
+// but keeps the dynamic symbol table, so nothing else linking against these
+// binaries/libraries at build time or runtime is affected.
+static void flux_strip_and_prune(const char *destdir) {
+    char cmd[FLUX_MAX_PATH_LEN + 128];
+
+    snprintf(cmd, sizeof(cmd),
+        "find \"%s\" -type f \\( -perm -u+x -o -name '*.so*' \\) "
+        "-exec strip --strip-unneeded {} + 2>/dev/null", destdir);
+    system(cmd);
+
+    snprintf(cmd, sizeof(cmd), "find \"%s\" -type f -name '*.a' -delete", destdir);
+    system(cmd);
+}
+
 int flux_cache_store(const char *key, const char *destdir, const char *secret_key_path) {
     char archive[FLUX_MAX_PATH_LEN];
     snprintf(archive, sizeof(archive), "/var/cache/flux/%s.tar.zst", key);
 
     system("mkdir -p /var/cache/flux");
+    flux_strip_and_prune(destdir);
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "tar -C \"%s\" -cf - . | zstd -o \"%s\"", destdir, archive);
