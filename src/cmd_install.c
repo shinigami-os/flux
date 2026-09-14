@@ -15,17 +15,18 @@ static int g_auto_installed = 0;
 static int g_yes = 0;
 static int g_force = 0;
 static int g_flatpak = 0;
-// set only by install_batch's per-package recursive calls: dependency
+// set only by run_install's per-package recursive calls: dependency
 // resolution + the summary table + the confirmation prompt already happened
 // once for the whole batch, so each individual call should skip doing its
 // own - kept separate from g_auto_installed, which still has to reflect
 // whether THIS package was a root request or a pulled-in dep (DB bookkeeping
 // for `flux autoremove`, and the "Installing" vs "installing dependency" header)
 static int g_skip_deps = 0;
+static int g_verbose = 0;
 // set right before installing a resolved queue, so try_alpine_install() reuses the index that walk already loaded instead of refetching it per package
 static alpine_repos_t *g_active_repos = NULL;
 
-static int install_batch(int argc, char **argv, const char *usage, flux_config_t *config);
+static int run_install(int argc, char **argv, const char *usage, flux_config_t *config);
 int flux_install(int argc, char **argv, const char *usage);
 
 // returns FLUX_ERR_NOT_FOUND if flatpak is unusable or nothing matched, so the caller falls through to its own "no recipe found" error
@@ -290,6 +291,7 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
             strncpy(queue->pkgs[queue->count].name, real_name, FLUX_MAX_NAME_LEN - 1);
             strncpy(queue->pkgs[queue->count].version, p->version, FLUX_MAX_VERSION_LEN - 1);
             queue->pkgs[queue->count].source = 'A';
+            queue->pkgs[queue->count].size = p->size;
             queue->count++;
         }
         return FLUX_ERR_NONE;
@@ -605,63 +607,6 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     return FLUX_ERR_NONE;
 }
 
-static void build_queue_row(const flux_queue_entry_t *entry, flux_table_row_t *row) {
-    strncpy(row->col1, entry->name, FLUX_MAX_NAME_LEN - 1);
-    strncpy(row->col2, entry->version, FLUX_MAX_VERSION_LEN - 1);
-}
-
-// prints the resolved queue and asks to proceed; 1 = proceed (including -y), 0 = user declined
-static int confirm_queue(flux_install_queue_t *queue) {
-    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
-    for (int i = 0; i < queue->count; i++)
-        build_queue_row(&queue->pkgs[i], &rows[i]);
-
-    char title[64];
-    snprintf(title, sizeof(title), "%d package%s will be installed", queue->count, queue->count == 1 ? "" : "s");
-    printf("\n");
-    flux_print_table(title, rows, queue->count);
-    printf("\nProceed? [Y/n] ");
-    fflush(stdout);
-
-    if (g_yes) {
-        printf("Y\n");
-        return 1;
-    }
-    char answer[8] = {0};
-    if (fgets(answer, sizeof(answer), stdin) && (answer[0] == 'n' || answer[0] == 'N')) {
-        printf("Aborted.\n");
-        return 0;
-    }
-    return 1;
-}
-
-// installs a resolved queue in order, recursing per entry so each re-routes through the kira-*/Alpine check
-static int install_resolved_queue(flux_install_queue_t *queue, alpine_repos_t *repos) {
-    int saved_force = g_force;
-    g_active_repos = repos;
-    int overall_err = FLUX_ERR_NONE;
-
-    for (int i = 0; i < queue->count; i++) {
-        int is_root = (i == queue->count - 1);
-        g_auto_installed = is_root ? 0 : 1;
-        g_force = is_root ? saved_force : 0; // deps are never force-reinstalled, only the root package is
-        g_skip_deps = 1;
-        char *one_argv[] = { queue->pkgs[i].name };
-        int err = flux_install(1, one_argv, "flux install <pkg>");
-        g_skip_deps = 0;
-        if (err != FLUX_ERR_NONE) {
-            flux_err("failed to install '%s'", queue->pkgs[i].name);
-            overall_err = (i == queue->count - 1) ? err : FLUX_ERR_DEPENDENCY;
-            break;
-        }
-    }
-
-    g_auto_installed = 0;
-    g_active_repos = NULL;
-    g_force = saved_force;
-    return overall_err;
-}
-
 int flux_install(int argc, char **argv, const char *usage) {
     while (argc >= 1 && argv[0][0] == '-') {
         if (strcmp(argv[0], "-y") == 0)
@@ -670,6 +615,8 @@ int flux_install(int argc, char **argv, const char *usage) {
             g_force = 1;
         else if (strcmp(argv[0], "--flatpak") == 0)
             g_flatpak = 1;
+        else if (strcmp(argv[0], "-v") == 0 || strcmp(argv[0], "--verbose") == 0)
+            g_verbose = 1;
         else {
             flux_usage_error(usage);
             return FLUX_ERR_USAGE;
@@ -701,42 +648,16 @@ int flux_install(int argc, char **argv, const char *usage) {
         return fp_err;
     }
 
-    // more than one package name on a top-level call (not one of install_batch's
-    // own recursive single-package calls, which always pass argc == 1) - resolve
-    // and install all of them together instead of only ever looking at argv[0]
-    if (argc > 1 && !g_skip_deps)
-        return install_batch(argc, argv, usage, &config);
+    // top-level call, not one of run_install's own recursive single-package
+    // calls (those always pass g_skip_deps=1): resolve everything into one
+    // queue, confirm once, download once, then install each entry below
+    if (!g_skip_deps)
+        return run_install(argc, argv, usage, &config);
 
     // name alone decides the source: kira-* is always kotodama, everything
     // else is always resolved against Alpine - no recipe-existence probing
-    if (!flux_is_kira_pkg(pkg)) {
-        // one of install_resolved_queue's own recursive calls - deps already resolved, just install this entry
-        if (g_skip_deps)
-            return try_alpine_install(pkg, &config);
-
-        // a plain Alpine name has its own deps too, so it gets the same resolve-then-install-queue treatment as a kira-* root below
-        flux_install_queue_t queue;
-        memset(&queue, 0, sizeof(queue));
-        char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
-        memset(visited, 0, sizeof(visited));
-        int visited_count = 0;
-
-        collect_ctx_t ctx;
-        memset(&ctx, 0, sizeof(ctx));
-        ctx.config = &config;
-
-        int err2 = collect_deps(pkg, &ctx, &queue, visited, &visited_count);
-        if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
-
-        if (queue.count > 1 && !confirm_queue(&queue)) {
-            alpine_repos_free(&ctx.repos);
-            return FLUX_ERR_NONE;
-        }
-
-        int result = install_resolved_queue(&queue, &ctx.repos);
-        alpine_repos_free(&ctx.repos);
-        return result;
-    }
+    if (!flux_is_kira_pkg(pkg))
+        return try_alpine_install(pkg, &config);
 
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
@@ -814,56 +735,6 @@ int flux_install(int argc, char **argv, const char *usage) {
         } else {
             flux_warn("cache key generation failed, building from source");
         }
-    }
-
-    if (!g_skip_deps) {
-        flux_install_queue_t queue;
-        memset(&queue, 0, sizeof(queue));
-        char visited[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
-        memset(visited, 0, sizeof(visited));
-        int visited_count = 0;
-
-        collect_ctx_t ctx;
-        memset(&ctx, 0, sizeof(ctx));
-        ctx.config = &config;
-
-        int err2 = collect_deps(pkg, &ctx, &queue, visited, &visited_count);
-        if (err2 != FLUX_ERR_NONE) { alpine_repos_free(&ctx.repos); return err2; }
-
-        if ((queue.count > 1 || (queue.count == 1 && strcmp(queue.pkgs[0].name, pkg) != 0))
-            && !confirm_queue(&queue)) {
-            alpine_repos_free(&ctx.repos);
-            return FLUX_ERR_NONE;
-        }
-
-        int saved_force = g_force;
-        g_force = 0;          /* deps are never force-reinstalled, only the root package is */
-        g_auto_installed = 1;
-        g_active_repos = &ctx.repos;
-        for (int i = 0; i < queue.count - 1; i++) {
-            // this queue is already the fully-resolved transitive closure,
-            // cycles included (e.g. elogind <-> polkit) - re-resolving from
-            // here would give each recursive call its own fresh visited set,
-            // and a genuine cycle would recurse forever each half trying to
-            // install the other first. g_skip_deps makes the nested call
-            // just install this one entry instead of resolving again.
-            g_skip_deps = 1;
-            char *dep_argv[] = { queue.pkgs[i].name };
-            int dep_err = flux_install(1, dep_argv, "flux install <pkg>");
-            g_skip_deps = 0;
-            if (dep_err != FLUX_ERR_NONE) {
-                flux_err("failed to install dependency '%s'", queue.pkgs[i].name);
-                g_auto_installed = 0;
-                g_active_repos = NULL;
-                g_force = saved_force;
-                alpine_repos_free(&ctx.repos);
-                return FLUX_ERR_DEPENDENCY;
-            }
-        }
-        g_auto_installed = 0;
-        g_active_repos = NULL;
-        g_force = saved_force;
-        alpine_repos_free(&ctx.repos);
     }
 
     if (cache_hit) {
@@ -1107,13 +978,12 @@ int flux_install(int argc, char **argv, const char *usage) {
     return FLUX_ERR_NONE;
 }
 
-// resolves + confirms + downloads + installs several top-level package names
-// in one call: dependency resolution happens once for the combined,
-// deduplicated set, every plain-tarball source gets pre-fetched behind one
-// aggregated progress bar, then each queue member installs in dependency
-// order via a recursive single-package call (g_skip_deps = 1, since the
-// resolution/table/confirmation above already covers it)
-static int install_batch(int argc, char **argv, const char *usage, flux_config_t *config) {
+// resolves one or more top-level package names into a single queue, confirms
+// once (a readable grid past one entry), downloads everything behind one
+// global bar, then installs each queue member in dependency order behind a
+// second global bar - each install is still a recursive single-package call
+// (g_skip_deps = 1, since resolution/confirmation already happened above)
+static int run_install(int argc, char **argv, const char *usage, flux_config_t *config) {
     (void)usage;
 
     flux_install_queue_t queue;
@@ -1147,15 +1017,30 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         return FLUX_ERR_NONE;
     }
 
-    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    // a single resolved package (the common case) skips the table/bars entirely -
+    // same light experience as installing one package always had
+    if (queue.count == 1) {
+        g_skip_deps = 1;
+        char *one_argv[] = { queue.pkgs[0].name };
+        int err = flux_install(1, one_argv, "flux install <pkg>");
+        g_skip_deps = 0;
+        alpine_repos_free(&ctx.repos);
+        return err;
+    }
+
+    flux_grid_item_t rows[FLUX_MAX_INSTALL_QUEUE];
+    long total_download_bytes = 0;
+    int unknown_size_count = 0;
     for (int i = 0; i < queue.count; i++) {
         strncpy(rows[i].col1, queue.pkgs[i].name, FLUX_MAX_NAME_LEN - 1);
 
         if (queue.pkgs[i].source == 'A') {
-            strncpy(rows[i].col2, "alpine", FLUX_MAX_VERSION_LEN - 1);
+            strncpy(rows[i].col2, queue.pkgs[i].version, sizeof(rows[i].col2) - 1);
+            total_download_bytes += queue.pkgs[i].size;
             continue;
         }
 
+        unknown_size_count++;
         char kp[FLUX_MAX_PATH_LEN * 2 + 16];
         snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i].name);
         flux_recipe_t r;
@@ -1166,13 +1051,21 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         if (flux_db_read_info(queue.pkgs[i].name, &old_info) == FLUX_ERR_NONE && strcmp(old_info.version, r.version) != 0)
             snprintf(rows[i].col2, sizeof(rows[i].col2), "%s -> %s", old_info.version, r.version);
         else
-            strncpy(rows[i].col2, r.version, FLUX_MAX_VERSION_LEN - 1);
+            strncpy(rows[i].col2, r.version, sizeof(rows[i].col2) - 1);
     }
+
     char title[64];
     snprintf(title, sizeof(title), "%d package%s will be installed",
              queue.count, queue.count == 1 ? "" : "s");
+    char footer[96];
+    if (unknown_size_count > 0)
+        snprintf(footer, sizeof(footer), "%.1fMB to download (+%d built from source)",
+                 total_download_bytes / 1024.0 / 1024.0, unknown_size_count);
+    else
+        snprintf(footer, sizeof(footer), "%.1fMB to download", total_download_bytes / 1024.0 / 1024.0);
+
     printf("\n");
-    flux_print_table(title, rows, queue.count);
+    flux_print_grid(title, rows, queue.count, footer);
     printf("\nProceed? [Y/n] ");
     fflush(stdout);
     if (g_yes) {
@@ -1189,10 +1082,28 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
     }
     printf("\n");
 
+    // download phase: kira-* plain-tarball sources and Alpine .apk fetches
+    // share one global bar - alpine_apk_download()/the kira-* tarball check
+    // in flux_install() both recognize an already-fetched file and skip re-downloading it
     flux_download_item_t downloads[FLUX_MAX_INSTALL_QUEUE];
     int download_count = 0;
+    char arch[ALPINE_MAX_ARCH_LEN];
+    alpine_arch_from_target(config->package_target, arch, sizeof(arch));
+
     for (int i = 0; i < queue.count; i++) {
-        if (queue.pkgs[i].source == 'A') continue;
+        if (queue.pkgs[i].source == 'A') {
+            const char *repo = NULL;
+            const alpine_pkg_t *p = alpine_repos_find_by_name(&ctx.repos, queue.pkgs[i].name, &repo);
+            if (!p) continue;
+            char url[FLUX_MAX_URL_LEN];
+            alpine_apk_url(config, repo, arch, p->name, p->version, url, sizeof(url));
+            strncpy(downloads[download_count].url, url, FLUX_MAX_URL_LEN - 1);
+            snprintf(downloads[download_count].dest, sizeof(downloads[download_count].dest),
+                     "/tmp/flux-build/%s-%s.apk", p->name, p->version);
+            downloads[download_count].known_size = p->size;
+            download_count++;
+            continue;
+        }
 
         char kp[FLUX_MAX_PATH_LEN * 2 + 16];
         snprintf(kp, sizeof(kp), "%s/%s/kotodama", config->local_repo_path, queue.pkgs[i].name);
@@ -1217,17 +1128,24 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         strncpy(downloads[download_count].url, r.url, FLUX_MAX_URL_LEN - 1);
         snprintf(downloads[download_count].dest, sizeof(downloads[download_count].dest),
                  "/tmp/flux-build/%s", url_basename);
+        downloads[download_count].known_size = 0;
         download_count++;
     }
 
     if (download_count > 0) {
         system("mkdir -p /tmp/flux-build");
         if (flux_download_batch(downloads, download_count) != FLUX_ERR_NONE) {
-            flux_err("failed to download sources");
+            flux_err("failed to download packages");
             alpine_repos_free(&ctx.repos);
             return FLUX_ERR_NETWORK;
         }
     }
+
+    // install phase: quiet unless -v, one shared progress bar in place of
+    // each package's own fetch/verify/extract/install lines
+    int quiet = !g_verbose;
+    if (quiet) flux_set_quiet(1);
+    flux_batch_progress_begin(queue.count);
 
     int saved_force = g_force;
     int overall_err = FLUX_ERR_NONE;
@@ -1237,6 +1155,7 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         for (int j = 0; j < argc; j++) {
             if (strcmp(argv[j], queue.pkgs[i].name) == 0) { is_root = 1; break; }
         }
+        flux_batch_progress_advance(queue.pkgs[i].name);
         g_auto_installed = !is_root;
         g_force = is_root ? saved_force : 0; // deps are never force-reinstalled, only roots are - same rule as the single-package path
         g_skip_deps = 1;
@@ -1244,11 +1163,19 @@ static int install_batch(int argc, char **argv, const char *usage, flux_config_t
         int err = flux_install(1, one_argv, "flux install <pkg>");
         g_skip_deps = 0;
         if (err != FLUX_ERR_NONE) {
+            flux_batch_progress_end();
+            if (quiet) flux_set_quiet(0);
             flux_err("failed to install '%s'", queue.pkgs[i].name);
             overall_err = is_root ? err : FLUX_ERR_DEPENDENCY;
             break;
         }
     }
+    if (overall_err == FLUX_ERR_NONE) {
+        flux_batch_progress_end();
+        if (quiet) flux_set_quiet(0);
+        flux_ok("%d packages installed", queue.count);
+    }
+
     g_auto_installed = 0;
     g_active_repos = NULL;
     g_force = saved_force;

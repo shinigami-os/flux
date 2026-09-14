@@ -102,6 +102,7 @@ typedef struct {
     char name[FLUX_MAX_NAME_LEN];
     char version[FLUX_MAX_VERSION_LEN]; // resolved at queue-build time, so the confirmation table needs no second lookup
     char source; // 'K' = kotodama, 'A' = alpine
+    long size; // download size in bytes for source=='A' (from the Alpine index); 0 for kotodama, no verified size
 } flux_queue_entry_t;
 
 typedef struct {

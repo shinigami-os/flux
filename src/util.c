@@ -679,6 +679,10 @@ int flux_colors_enabled(void) {
     return enabled;
 }
 
+static int g_quiet = 0;
+void flux_set_quiet(int on) { g_quiet = on; }
+int flux_is_quiet(void) { return g_quiet; }
+
 // glyph-prefixed, color-wrapped line with a trailing newline already included
 static void flux_vglyph(FILE *stream, const char *color, const char *glyph, const char *fmt, va_list ap) {
     if (flux_colors_enabled()) fprintf(stream, "%s%s ", color, glyph);
@@ -696,6 +700,7 @@ void flux_log(const char *fmt, ...) {
 }
 
 void flux_ok(const char *fmt, ...) {
+    if (g_quiet) return;
     va_list ap;
     va_start(ap, fmt);
     flux_vglyph(stdout, "\033[32m", "\xe2\x9c\x93", fmt, ap); // ✓ green
@@ -717,6 +722,7 @@ void flux_err(const char *fmt, ...) {
 }
 
 void flux_action(const char *fmt, ...) {
+    if (g_quiet) return;
     va_list ap;
     va_start(ap, fmt);
     if (flux_colors_enabled()) printf("\033[1;35m");
@@ -727,6 +733,7 @@ void flux_action(const char *fmt, ...) {
 }
 
 void flux_step(const char *fmt, ...) {
+    if (g_quiet) return;
     va_list ap;
     va_start(ap, fmt);
     if (flux_colors_enabled()) printf("  \033[36m\xe2\x80\xa2\033[0m "); // • dim cyan bullet
@@ -767,6 +774,39 @@ void flux_print_table(const char *title, const flux_table_row_t *rows, int count
     for (int i = 0; i < count; i++)
         printf("  %-*s  %-*s\n", (int)w1, rows[i].col1, (int)w2, rows[i].col2);
     flux_rule();
+}
+
+void flux_print_grid(const char *title, const flux_grid_item_t *items, int count, const char *footer) {
+    size_t cellw = 28; // enough for a typical "name  version" pair
+    for (int i = 0; i < count; i++) {
+        size_t w = strlen(items[i].col1) + 2 + strlen(items[i].col2);
+        if (w > cellw) cellw = w;
+    }
+
+    int cols = (flux_term_width() - 2) / ((int)cellw + 2);
+    if (cols < 1) cols = 1;
+    if (cols > 3) cols = 3;
+    int rows = (count + cols - 1) / cols;
+
+    if (title) {
+        if (flux_colors_enabled()) printf("\033[1m");
+        printf("%s\n", title);
+        if (flux_colors_enabled()) printf("\033[0m");
+    }
+    flux_rule();
+    for (int r = 0; r < rows; r++) {
+        printf("  ");
+        for (int c = 0; c < cols; c++) {
+            int idx = c * rows + r;
+            if (idx >= count) continue;
+            char cell[192];
+            snprintf(cell, sizeof(cell), "%s  %s", items[idx].col1, items[idx].col2);
+            printf("%-*s", (int)cellw + 2, cell);
+        }
+        printf("\n");
+    }
+    flux_rule();
+    if (footer) printf("%s\n", footer);
 }
 
 double flux_now_seconds(void) {
@@ -880,7 +920,7 @@ int flux_download_batch(const flux_download_item_t *items, int count) {
     long grand_total = 0;
     int have_all_sizes = 1;
     for (int i = 0; i < count && i < FLUX_MAX_INSTALL_QUEUE; i++) {
-        totals[i] = fetch_content_length(items[i].url);
+        totals[i] = items[i].known_size > 0 ? items[i].known_size : fetch_content_length(items[i].url);
         if (totals[i] < 0) have_all_sizes = 0;
         else grand_total += totals[i];
     }
@@ -952,4 +992,36 @@ int flux_download_batch(const flux_download_item_t *items, int count) {
     }
     if (tty) printf("\r\033[K");
     return FLUX_ERR_NONE;
+}
+
+// count-based progress bar for the install phase (no byte stream to sample, just discrete
+// per-package completions) - visually matches flux_download_batch's bar
+static int g_bp_total = 0;
+static int g_bp_index = 0;
+
+void flux_batch_progress_begin(int total) {
+    g_bp_total = total;
+    g_bp_index = 0;
+}
+
+void flux_batch_progress_advance(const char *name) {
+    g_bp_index++;
+    if (!isatty(STDOUT_FILENO)) {
+        printf("  (%d/%d) %s\n", g_bp_index, g_bp_total, name);
+        return;
+    }
+    const char *purple = flux_colors_enabled() ? "\033[38;2;170;0;255m" : "";
+    const char *reset = flux_colors_enabled() ? "\033[0m" : "";
+    const int bar_w = 30;
+    int pct = g_bp_total > 0 ? (g_bp_index * 100) / g_bp_total : 100;
+    int filled = pct * bar_w / 100;
+    printf("\r  %s[", purple);
+    for (int b = 0; b < bar_w; b++)
+        fputs(b < filled ? "\xe2\x96\x88" : "\xe2\x96\x91", stdout); // █ / ░
+    printf("]%s %3d%%  (%d/%d)  %s\033[K", reset, pct, g_bp_index, g_bp_total, name);
+    fflush(stdout);
+}
+
+void flux_batch_progress_end(void) {
+    if (isatty(STDOUT_FILENO)) printf("\r\033[K");
 }

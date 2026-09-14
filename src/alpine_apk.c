@@ -18,6 +18,10 @@ int alpine_apk_download(const flux_config_t *config, const char *repo, const cha
 
     system("mkdir -p /tmp/flux-build");
     snprintf(path_out, path_outlen, "/tmp/flux-build/%s-%s.apk", name, version);
+
+    struct stat st;
+    if (stat(path_out, &st) == 0 && st.st_size > 0) return FLUX_ERR_NONE; // already fetched by a batch download pass
+
     return flux_download(url, path_out);
 }
 

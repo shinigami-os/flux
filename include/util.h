@@ -52,6 +52,8 @@ int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen);
 int flux_fetch_latest_kernel_version(const char *cache_url, char *out, size_t outlen);
 
 int flux_colors_enabled(void);
+void flux_set_quiet(int on);   // suppresses flux_step/flux_action/flux_ok while a batch progress bar owns the screen
+int  flux_is_quiet(void);
 void flux_log(const char *fmt, ...);
 void flux_ok(const char *fmt, ...);
 void flux_warn(const char *fmt, ...);
@@ -71,6 +73,16 @@ typedef struct {
 // prints a bordered two-column table (e.g. package name / version)
 void flux_print_table(const char *title, const flux_table_row_t *rows, int count);
 
+typedef struct {
+    char col1[FLUX_MAX_NAME_LEN];
+    char col2[104];
+} flux_grid_item_t;
+
+// reflows items into 1-3 columns (whichever fit the terminal width), column-major like `ls -C`,
+// instead of flux_print_table's one row per line - for confirmation lists that can run to hundreds
+// of entries. footer (may be NULL) prints as its own line below the closing rule.
+void flux_print_grid(const char *title, const flux_grid_item_t *items, int count, const char *footer);
+
 double flux_now_seconds(void);            // monotonic-ish wall clock for elapsed-time summaries
 
 int flux_download(const char *url, const char *dest); // silences curl's own meter, draws a styled progress bar instead
@@ -78,10 +90,17 @@ int flux_download(const char *url, const char *dest); // silences curl's own met
 typedef struct {
     char url[FLUX_MAX_URL_LEN];
     char dest[FLUX_MAX_PATH_LEN];
+    long known_size; // >0 if the caller already knows the size (skips the HEAD probe); 0 = probe it
 } flux_download_item_t;
 
 // same as flux_download but for several files at once: one bar tracking
 // cumulative bytes across the whole batch instead of one bar per file
 int flux_download_batch(const flux_download_item_t *items, int count);
+
+// count-based progress bar for a batch install: begin(total), advance(name) once per item
+// right before it starts, end() to clear the line
+void flux_batch_progress_begin(int total);
+void flux_batch_progress_advance(const char *name);
+void flux_batch_progress_end(void);
 
 #endif
