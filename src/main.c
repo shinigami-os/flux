@@ -23,7 +23,7 @@ flux_cmd_t commands[] = {
     {"search", flux_search, "Search available recipes", "flux search <query>"},
     {"build", flux_build, "Force local compilation regardless of cache", "flux build [--cross] <pkg>"},
     {"remove", flux_remove, "Remove a package, optionally its orphaned deps", "flux remove [-a] <pkg>"},
-    {"autoremove", flux_autoremove, "Remove all orphaned auto-installed dependencies", "flux autoremove"},
+    {"autoremove", flux_autoremove, "Remove all orphaned auto-installed dependencies", "flux autoremove [-n|--dry-run]"},
     {"update", flux_update, "Sync recipe repo, report package updates, and check for newer flux/kira-base releases", "flux update [-i]"},
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},
     {"list", flux_list, "List installed packages", "flux list [-a]"},

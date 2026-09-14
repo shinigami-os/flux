@@ -34,7 +34,7 @@ int flux_remove(int argc, char **argv, const char *usage) {
 
     if (autoremove) {
         int removed = 0;
-        flux_autoremove_orphans(&removed);
+        flux_autoremove_orphans(&removed, 0);
         if (removed > 0)
             flux_ok("removed %d orphaned dependency package(s)", removed);
         else

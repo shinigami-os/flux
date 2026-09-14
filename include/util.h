@@ -2,6 +2,7 @@
 #define UTIL_H
 
 #include "flux.h"
+#include "alpine.h"
 #include <stddef.h>
 
 void flux_usage_error(const char *usage);
@@ -17,8 +18,8 @@ int flux_db_remove(const char *name);
 int flux_db_read_info(const char *name, flux_pkg_info_t *info);
 int flux_db_set_auto_installed(const char *name, int auto_installed);
 int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count);
-int flux_recipe_runtime_depends_on(const char *recipe_name, const char *dep_name, const flux_config_t *config);
-int flux_autoremove_orphans(int *removed_count);
+int flux_pkg_runtime_depends_on(const char *pkg_name, const char *dep_name, const flux_config_t *config, const alpine_repos_t *repos);
+int flux_autoremove_orphans(int *removed_count, int dry_run);
 
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
 int flux_is_kira_pkg(const char *name);

@@ -56,7 +56,7 @@ const alpine_pkg_t *alpine_repos_find_by_name(const alpine_repos_t *repos, const
 }
 
 // strips a trailing version constraint, e.g. "musl>=1.2.5-r0" -> "musl" - the resolver is greedy/unversioned
-static void strip_constraint(const char *token, char *out, size_t outlen) {
+void alpine_strip_constraint(const char *token, char *out, size_t outlen) {
     size_t i = 0;
     while (token[i] && token[i] != '=' && token[i] != '<' && token[i] != '>' && token[i] != '~' && i < outlen - 1) {
         out[i] = token[i];
@@ -65,7 +65,7 @@ static void strip_constraint(const char *token, char *out, size_t outlen) {
     out[i] = '\0';
 }
 
-static int provides_matches(const char *provides_raw, const char *bare_token) {
+int alpine_provides_matches(const char *provides_raw, const char *bare_token) {
     if (!provides_raw) return 0;
 
     alpine_dep_t tokens[ALPINE_MAX_TOKENS_PER_LINE];
@@ -74,7 +74,7 @@ static int provides_matches(const char *provides_raw, const char *bare_token) {
 
     for (int i = 0; i < count; i++) {
         char bare[ALPINE_MAX_DEP_TOKEN_LEN];
-        strip_constraint(tokens[i].token, bare, sizeof(bare));
+        alpine_strip_constraint(tokens[i].token, bare, sizeof(bare));
         if (strcmp(bare, bare_token) == 0) return 1;
     }
     return 0;
@@ -88,7 +88,7 @@ static int provides_matches(const char *provides_raw, const char *bare_token) {
 static const alpine_pkg_t *find_provider_in(const alpine_index_t *idx, const char *bare_token, const char **out_repo, const char *repo_name) {
     const alpine_pkg_t *first = NULL;
     for (int i = 0; i < idx->count; i++) {
-        if (!provides_matches(idx->pkgs[i].provides_raw, bare_token)) continue;
+        if (!alpine_provides_matches(idx->pkgs[i].provides_raw, bare_token)) continue;
         if (!first) first = &idx->pkgs[i];
         if (flux_db_is_installed(idx->pkgs[i].name)) {
             if (out_repo) *out_repo = repo_name;
@@ -101,7 +101,7 @@ static const alpine_pkg_t *find_provider_in(const alpine_index_t *idx, const cha
 
 const alpine_pkg_t *alpine_repos_find_provider(const alpine_repos_t *repos, const char *capability_token, const char **out_repo) {
     char bare[ALPINE_MAX_DEP_TOKEN_LEN];
-    strip_constraint(capability_token, bare, sizeof(bare));
+    alpine_strip_constraint(capability_token, bare, sizeof(bare));
 
     const alpine_pkg_t *main_match = find_provider_in(&repos->main, bare, out_repo, "main");
     if (main_match && flux_db_is_installed(main_match->name)) return main_match;
@@ -130,7 +130,7 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
         if (tok[0] == '!') {
             if (*conflicts_count < max_conflicts) {
                 char bare[ALPINE_MAX_DEP_TOKEN_LEN];
-                strip_constraint(tok + 1, bare, sizeof(bare));
+                alpine_strip_constraint(tok + 1, bare, sizeof(bare));
                 strncpy(conflicts_out[*conflicts_count], bare, ALPINE_MAX_NAME_LEN - 1);
                 (*conflicts_count)++;
             }
@@ -138,7 +138,7 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
         }
 
         char bare[ALPINE_MAX_DEP_TOKEN_LEN];
-        strip_constraint(tok, bare, sizeof(bare));
+        alpine_strip_constraint(tok, bare, sizeof(bare));
         if (bare[0] == '\0') continue;
 
         const alpine_pkg_t *provider = NULL;
@@ -157,13 +157,13 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
             int already_satisfied = 0;
             for (int j = 0; j < *names_count && !already_satisfied; j++) {
                 const alpine_pkg_t *existing = alpine_repos_find_by_name(repos, names_out[j], NULL);
-                if (existing && provides_matches(existing->provides_raw, bare)) already_satisfied = 1;
+                if (existing && alpine_provides_matches(existing->provides_raw, bare)) already_satisfied = 1;
             }
             // also check every package already committed elsewhere in this install's dependency graph -
             // a sibling dependency processed before this one can already have claimed the same capability
             for (int j = 0; j < already_selected_count && !already_satisfied; j++) {
                 const alpine_pkg_t *existing = alpine_repos_find_by_name(repos, already_selected[j], NULL);
-                if (existing && provides_matches(existing->provides_raw, bare)) already_satisfied = 1;
+                if (existing && alpine_provides_matches(existing->provides_raw, bare)) already_satisfied = 1;
             }
             if (already_satisfied) continue;
 

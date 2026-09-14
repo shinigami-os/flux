@@ -53,6 +53,10 @@ int alpine_index_load(const char *tar_gz_path, alpine_index_t *index);
 void alpine_index_free(alpine_index_t *index);
 alpine_pkg_t *alpine_index_find(alpine_index_t *index, const char *name);
 int alpine_parse_dep_line(const char *raw, alpine_dep_t *out, int max, int *count);
+// strips a trailing version constraint, e.g. "musl>=1.2.5-r0" -> "musl"
+void alpine_strip_constraint(const char *token, char *out, size_t outlen);
+// true if provides_raw (a package's P: line) lists bare_token (already constraint-stripped)
+int alpine_provides_matches(const char *provides_raw, const char *bare_token);
 // true if every char in s is safe to embed in a shell command string (name/version/key-filename validation)
 int alpine_name_is_safe(const char *s);
 

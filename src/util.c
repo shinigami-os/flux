@@ -5,6 +5,7 @@
 #include <string.h>
 #include "../include/util.h"
 #include "../include/parser.h"
+#include "../include/alpine.h"
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -444,23 +445,54 @@ int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count)
     return FLUX_ERR_NONE;
 }
 
-// Only checks runtime= deps, not build= - a package's build deps are a
+// Only checks runtime deps, not build deps - a package's build deps are a
 // one-time need already satisfied by the time it's sitting installed, not
-// an ongoing reason to keep anything else around. This is autoremove's only
-// caller, and treating build= as equally permanent was the actual reason
-// gcc/cmake/ninja/every -dev package a from-source kira-* build pulls in
-// never got cleaned up: the consuming package's own recipe always lists
-// them, so the old check considered them "needed" forever.
-int flux_recipe_runtime_depends_on(const char *recipe_name, const char *dep_name, const flux_config_t *config) {
-    char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
-    snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, recipe_name);
+// an ongoing reason to keep anything else around. Treating build= as equally
+// permanent was the original reason gcc/cmake/ninja/every -dev package a
+// from-source kira-* build pulls in never got cleaned up: the consuming
+// package's own recipe always lists them, so the old check considered them
+// "needed" forever.
+//
+// pkg_name can be either a kira-* package (checked against its local
+// kotodama runtime= list) or a plain Alpine-resolved package, which has no
+// local kotodama file at all - those are checked against the real D: line
+// from the cached Alpine index instead. Conflating the two (or silently
+// treating "no kotodama file" as "no dependencies") is what caused
+// autoremove to remove real runtime dependencies of ordinary Alpine
+// packages: nothing being a local recipe was reporting them as needed.
+int flux_pkg_runtime_depends_on(const char *pkg_name, const char *dep_name,
+                                 const flux_config_t *config, const alpine_repos_t *repos) {
+    if (flux_is_kira_pkg(pkg_name)) {
+        char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg_name);
 
-    flux_recipe_t recipe;
-    memset(&recipe, 0, sizeof(recipe));
-    if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return 0;
+        flux_recipe_t recipe;
+        memset(&recipe, 0, sizeof(recipe));
+        if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return 0;
 
-    for (int i = 0; i < FLUX_MAX_RDEPS; i++)
-        if (strcmp(recipe.rdeps[i], dep_name) == 0) return 1;
+        for (int i = 0; i < FLUX_MAX_RDEPS; i++)
+            if (strcmp(recipe.rdeps[i], dep_name) == 0) return 1;
+        return 0;
+    }
+
+    const alpine_pkg_t *pkg = alpine_repos_find_by_name(repos, pkg_name, NULL);
+    if (!pkg) return 0;
+
+    alpine_dep_t tokens[ALPINE_MAX_TOKENS_PER_LINE];
+    int count = 0;
+    alpine_parse_dep_line(pkg->depends_raw, tokens, ALPINE_MAX_TOKENS_PER_LINE, &count);
+
+    const alpine_pkg_t *dep_pkg = alpine_repos_find_by_name(repos, dep_name, NULL);
+
+    for (int i = 0; i < count; i++) {
+        if (tokens[i].token[0] == '!') continue; // "!pkg" is a conflict, not a dependency
+        char bare[ALPINE_MAX_DEP_TOKEN_LEN];
+        alpine_strip_constraint(tokens[i].token, bare, sizeof(bare));
+        if (strcmp(bare, dep_name) == 0) return 1;
+        // the dependency line can name a capability (so:/cmd:/pc:, or a bare
+        // virtual name) that dep_name provides under a different name
+        if (dep_pkg && alpine_provides_matches(dep_pkg->provides_raw, bare)) return 1;
+    }
     return 0;
 }
 
@@ -506,12 +538,27 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
     return FLUX_ERR_NONE;
 }
 
-int flux_autoremove_orphans(int *removed_count) {
+int flux_autoremove_orphans(int *removed_count, int dry_run) {
     *removed_count = 0;
 
     flux_config_t config;
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
+
+    // loaded once for the whole walk (no network - whatever `flux update` last cached), since most
+    // installed packages are plain Alpine ones now checked against their real D: line, not a kotodama file
+    char arch[ALPINE_MAX_ARCH_LEN];
+    alpine_repos_t repos;
+    memset(&repos, 0, sizeof(repos));
+    if (alpine_arch_from_target(config.package_target, arch, sizeof(arch)) == FLUX_ERR_NONE)
+        alpine_repos_load(&config, arch, &repos);
+
+    // in dry-run nothing is actually removed, so flux_db_list_installed would keep re-listing (and
+    // re-reporting) the same orphans on every pass forever - track what's already been decided on
+    // instead, and treat it as gone for both re-listing and "is i still needed" purposes, the same
+    // way a real removal would make it disappear from the next pass's flux_db_list_installed
+    char removed_names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int removed_names_count = 0;
 
     // repeat until a pass removes nothing, so a chain of newly-orphaned deps gets cleaned up in one call
     for (int pass = 0; pass < 50; pass++) {
@@ -521,6 +568,11 @@ int flux_autoremove_orphans(int *removed_count) {
 
         int removed_this_pass = 0;
         for (int i = 0; i < count; i++) {
+            int i_already_decided = 0;
+            for (int k = 0; k < removed_names_count; k++)
+                if (strcmp(removed_names[k], names[i]) == 0) { i_already_decided = 1; break; }
+            if (i_already_decided) continue;
+
             flux_pkg_info_t info;
             if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
             if (!info.auto_installed) continue;
@@ -528,17 +580,28 @@ int flux_autoremove_orphans(int *removed_count) {
             int needed = 0;
             for (int j = 0; j < count; j++) {
                 if (j == i) continue;
-                if (flux_recipe_runtime_depends_on(names[j], names[i], &config)) { needed = 1; break; }
+                int j_already_decided = 0;
+                for (int k = 0; k < removed_names_count; k++)
+                    if (strcmp(removed_names[k], names[j]) == 0) { j_already_decided = 1; break; }
+                if (j_already_decided) continue; // already decided to remove j, can't be a reason to keep i
+                if (flux_pkg_runtime_depends_on(names[j], names[i], &config, &repos)) { needed = 1; break; }
             }
             if (needed) continue;
 
-            flux_step("removing orphaned dependency: %s", names[i]);
-            flux_db_remove(names[i]);
+            if (dry_run) {
+                flux_step("would remove orphaned dependency: %s", names[i]);
+            } else {
+                flux_step("removing orphaned dependency: %s", names[i]);
+                flux_db_remove(names[i]);
+            }
+            if (removed_names_count < FLUX_MAX_INSTALL_QUEUE)
+                strncpy(removed_names[removed_names_count++], names[i], FLUX_MAX_NAME_LEN - 1);
             (*removed_count)++;
             removed_this_pass++;
         }
         if (removed_this_pass == 0) break;
     }
+    alpine_repos_free(&repos);
     return FLUX_ERR_NONE;
 }
 
