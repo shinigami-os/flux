@@ -126,12 +126,16 @@ int flux_update(int argc, char **argv, const char *usage) {
     if (outdated_count > 0) {
         if (install_updates) {
             flux_action("Installing %d update%s", outdated_count, outdated_count == 1 ? "" : "s");
-            for (int i = 0; i < outdated_count; i++) {
-                char *install_argv[] = { "-y", "-f", outdated[i] };
-                int err = flux_install(3, install_argv, "flux install [-y] [-f] <pkg>");
-                if (err != FLUX_ERR_NONE)
-                    flux_err("failed to update '%s'", outdated[i]);
-            }
+            // one batched call, same as "flux install pkg1 pkg2 ..." by hand - a plain
+            // install already reinstalls whenever the version moved on, -f is only for
+            // forcing a rebuild of a package already at the latest version
+            char *install_argv[FLUX_MAX_INSTALL_QUEUE + 1];
+            install_argv[0] = "-y";
+            for (int i = 0; i < outdated_count; i++)
+                install_argv[i + 1] = outdated[i];
+            int err = flux_install(outdated_count + 1, install_argv, "flux install [-y] [-f] <pkg>");
+            if (err != FLUX_ERR_NONE)
+                flux_err("failed to install one or more updates");
         } else {
             printf("\nRun 'flux update -i' to install %s.\n",
                    outdated_count == 1 ? "it" : "them");
