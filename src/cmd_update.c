@@ -19,6 +19,8 @@ static int  report_and_collect_updates(const flux_config_t *config, const char *
                                         char outdated[][FLUX_MAX_NAME_LEN], int max, int *count);
 static void collect_alpine_updates(const alpine_repos_t *repos,
                                     char outdated[][FLUX_MAX_NAME_LEN], int max, int *count);
+static void collect_floating_git_updates(const flux_config_t *config,
+                                          char outdated[][FLUX_MAX_NAME_LEN], int max, int *count);
 
 int flux_update(int argc, char **argv, const char *usage) {
     int install_updates = 0;
@@ -122,6 +124,9 @@ int flux_update(int argc, char **argv, const char *usage) {
             flux_warn("failed to sync Alpine package index");
         }
     }
+
+    flux_step("checking rolling git sources...");
+    collect_floating_git_updates(&config, outdated, FLUX_MAX_INSTALL_QUEUE, &outdated_count);
 
     if (outdated_count > 0) {
         if (install_updates) {
@@ -254,6 +259,55 @@ static void collect_alpine_updates(const alpine_repos_t *repos, char outdated[][
     if (rows_count > 0) {
         char title[64];
         snprintf(title, sizeof(title), "%d Alpine update%s available", rows_count, rows_count == 1 ? "" : "s");
+        printf("\n");
+        flux_print_table(title, rows, rows_count);
+    }
+}
+
+// a floating git+URL#branch source (no sha256 pin) never gets its own kotodama version
+// bumped just because upstream moved, so the git-diff based check above never sees it -
+// this is the only place that actually notices a rolling source like Sleex has moved on
+static void collect_floating_git_updates(const flux_config_t *config,
+                                          char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    if (flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n) != FLUX_ERR_NONE) return;
+
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    int rows_count = 0;
+
+    for (int i = 0; i < n && *count < max; i++) {
+        flux_pkg_info_t info;
+        if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
+        if (strcmp(info.source, "kotodama") != 0) continue;
+
+        char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, names[i]);
+        flux_recipe_t recipe;
+        memset(&recipe, 0, sizeof(recipe));
+        if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) continue;
+        if (strncmp(recipe.url, "git+", 4) != 0 || strlen(recipe.sha256) > 0) continue;
+
+        char git_url[512], git_ref[256], remote_head[65] = {0};
+        flux_split_git_source(recipe.url, git_url, sizeof(git_url), git_ref, sizeof(git_ref));
+        if (flux_resolve_git_remote_head(git_url, git_ref, remote_head, sizeof(remote_head)) != 0) continue;
+        if (strcmp(remote_head, info.git_commit) == 0) continue;
+
+        int already_listed = 0;
+        for (int j = 0; j < *count; j++)
+            if (strcmp(outdated[j], names[i]) == 0) { already_listed = 1; break; }
+        if (already_listed) continue;
+
+        strncpy(rows[rows_count].col1, names[i], FLUX_MAX_NAME_LEN - 1);
+        snprintf(rows[rows_count].col2, sizeof(rows[rows_count].col2), "%.8s -> %.8s", info.git_commit, remote_head);
+        rows_count++;
+        strncpy(outdated[*count], names[i], FLUX_MAX_NAME_LEN - 1);
+        (*count)++;
+    }
+
+    if (rows_count > 0) {
+        char title[64];
+        snprintf(title, sizeof(title), "%d rolling update%s available", rows_count, rows_count == 1 ? "" : "s");
         printf("\n");
         flux_print_table(title, rows, rows_count);
     }

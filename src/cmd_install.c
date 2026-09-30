@@ -166,41 +166,6 @@ static int run_hook(const char *hook, const char *build_dir, const char *destdir
 
 // splits a git+URL#ref source into its URL and ref parts - ref is left empty if the
 // source has no #ref at all, same convention the clone step itself already used inline
-static void split_git_source(const char *url, char *out_url, size_t out_url_len,
-                              char *out_ref, size_t out_ref_len) {
-    const char *git_url_start = url + 4; // past "git+"
-    const char *hash = strchr(git_url_start, '#');
-    out_ref[0] = '\0';
-    if (hash) {
-        size_t len = (size_t)(hash - git_url_start);
-        if (len >= out_url_len) len = out_url_len - 1;
-        strncpy(out_url, git_url_start, len);
-        out_url[len] = '\0';
-        strncpy(out_ref, hash + 1, out_ref_len - 1);
-    } else {
-        strncpy(out_url, git_url_start, out_url_len - 1);
-        out_url[out_url_len - 1] = '\0';
-    }
-}
-
-// a cheap remote lookup (no clone) for what HEAD of a branch currently points to -
-// used to detect a floating git source drifting ahead of what's actually installed
-static int resolve_git_remote_head(const char *url, const char *ref, char *out, size_t outlen) {
-    char cmd[768];
-    if (strlen(ref) > 0)
-        snprintf(cmd, sizeof(cmd), "git ls-remote \"%s\" \"%s\" | cut -f1 | tr -d '\\n' > /tmp/flux_remote_head", url, ref);
-    else
-        snprintf(cmd, sizeof(cmd), "git ls-remote \"%s\" HEAD | cut -f1 | tr -d '\\n' > /tmp/flux_remote_head", url);
-    if (system(cmd) != 0) return -1;
-    FILE *f = fopen("/tmp/flux_remote_head", "r");
-    if (!f) return -1;
-    size_t n = fread(out, 1, outlen - 1, f);
-    out[n] = '\0';
-    fclose(f);
-    remove("/tmp/flux_remote_head");
-    return (n == 40) ? 0 : -1; // a real commit hash, not an empty/error result
-}
-
 // true if pkg is installed and already at the recipe's current version - the
 // only case a plain (non -f) install should skip; a version mismatch means
 // an update is available and should proceed without needing -f
@@ -215,8 +180,8 @@ static int is_installed_and_current(const char *pkg, const flux_recipe_t *recipe
     // the recipe's own unchanged version string
     if (strncmp(recipe->url, "git+", 4) == 0 && strlen(recipe->sha256) == 0) {
         char git_url[512], git_ref[256], remote_head[65] = {0};
-        split_git_source(recipe->url, git_url, sizeof(git_url), git_ref, sizeof(git_ref));
-        if (resolve_git_remote_head(git_url, git_ref, remote_head, sizeof(remote_head)) == 0) {
+        flux_split_git_source(recipe->url, git_url, sizeof(git_url), git_ref, sizeof(git_ref));
+        if (flux_resolve_git_remote_head(git_url, git_ref, remote_head, sizeof(remote_head)) == 0) {
             if (strcmp(remote_head, info.git_commit) != 0) return 0;
         }
         // an ls-remote failure (offline, etc.) falls through and trusts the existing
@@ -877,7 +842,7 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     if (is_git) {
         char git_url[512], git_branch[256];
-        split_git_source(recipe.url, git_url, sizeof(git_url), git_branch, sizeof(git_branch));
+        flux_split_git_source(recipe.url, git_url, sizeof(git_url), git_branch, sizeof(git_branch));
 
         flux_step("cloning: %s", git_url);
         char clone_cmd[2048];

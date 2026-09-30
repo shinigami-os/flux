@@ -433,6 +433,43 @@ int flux_db_set_auto_installed(const char *name, int auto_installed) {
     return FLUX_ERR_NONE;
 }
 
+// splits a git+URL#ref source into its URL and ref parts - ref is left empty if the
+// source has no #ref at all
+void flux_split_git_source(const char *url, char *out_url, size_t out_url_len,
+                            char *out_ref, size_t out_ref_len) {
+    const char *git_url_start = url + 4; // past "git+"
+    const char *hash = strchr(git_url_start, '#');
+    out_ref[0] = '\0';
+    if (hash) {
+        size_t len = (size_t)(hash - git_url_start);
+        if (len >= out_url_len) len = out_url_len - 1;
+        strncpy(out_url, git_url_start, len);
+        out_url[len] = '\0';
+        strncpy(out_ref, hash + 1, out_ref_len - 1);
+    } else {
+        strncpy(out_url, git_url_start, out_url_len - 1);
+        out_url[out_url_len - 1] = '\0';
+    }
+}
+
+// a cheap remote lookup (no clone) for what HEAD of a branch currently points to -
+// used to detect a floating git source drifting ahead of what's actually installed
+int flux_resolve_git_remote_head(const char *url, const char *ref, char *out, size_t outlen) {
+    char cmd[768];
+    if (strlen(ref) > 0)
+        snprintf(cmd, sizeof(cmd), "git ls-remote \"%s\" \"%s\" | cut -f1 | tr -d '\\n' > /tmp/flux_remote_head", url, ref);
+    else
+        snprintf(cmd, sizeof(cmd), "git ls-remote \"%s\" HEAD | cut -f1 | tr -d '\\n' > /tmp/flux_remote_head", url);
+    if (system(cmd) != 0) return -1;
+    FILE *f = fopen("/tmp/flux_remote_head", "r");
+    if (!f) return -1;
+    size_t n = fread(out, 1, outlen - 1, f);
+    out[n] = '\0';
+    fclose(f);
+    remove("/tmp/flux_remote_head");
+    return (n == 40) ? 0 : -1; // a real commit hash, not an empty/error result
+}
+
 int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count) {
     *count = 0;
     DIR *d = opendir("/var/lib/flux/installed");
