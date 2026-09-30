@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.09-17"
+#define FLUX_VERSION "26.09-18"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
 // matches flux-recipes' actual GitHub default branch - only needed for the no-git tarball fallback below, git clone/pull just follow the default on their own
@@ -96,6 +96,9 @@ typedef struct {
     int  auto_installed; // 1 = pulled in as dep, 0 = explicitly installed
     // "kotodama" or "alpine"; empty on-disk means a pre-v2 entry, treated as kotodama everywhere it's displayed
     char source[16];
+    // the actual commit a floating git+URL#branch source (no sha256 pin) resolved to at
+    // install time - empty for everything else, including a pinned git+ source
+    char git_commit[64];
 } flux_pkg_info_t;
 
 typedef struct {

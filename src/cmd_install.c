@@ -164,13 +164,66 @@ static int run_hook(const char *hook, const char *build_dir, const char *destdir
     return ret;
 }
 
+// splits a git+URL#ref source into its URL and ref parts - ref is left empty if the
+// source has no #ref at all, same convention the clone step itself already used inline
+static void split_git_source(const char *url, char *out_url, size_t out_url_len,
+                              char *out_ref, size_t out_ref_len) {
+    const char *git_url_start = url + 4; // past "git+"
+    const char *hash = strchr(git_url_start, '#');
+    out_ref[0] = '\0';
+    if (hash) {
+        size_t len = (size_t)(hash - git_url_start);
+        if (len >= out_url_len) len = out_url_len - 1;
+        strncpy(out_url, git_url_start, len);
+        out_url[len] = '\0';
+        strncpy(out_ref, hash + 1, out_ref_len - 1);
+    } else {
+        strncpy(out_url, git_url_start, out_url_len - 1);
+        out_url[out_url_len - 1] = '\0';
+    }
+}
+
+// a cheap remote lookup (no clone) for what HEAD of a branch currently points to -
+// used to detect a floating git source drifting ahead of what's actually installed
+static int resolve_git_remote_head(const char *url, const char *ref, char *out, size_t outlen) {
+    char cmd[768];
+    if (strlen(ref) > 0)
+        snprintf(cmd, sizeof(cmd), "git ls-remote \"%s\" \"%s\" | cut -f1 | tr -d '\\n' > /tmp/flux_remote_head", url, ref);
+    else
+        snprintf(cmd, sizeof(cmd), "git ls-remote \"%s\" HEAD | cut -f1 | tr -d '\\n' > /tmp/flux_remote_head", url);
+    if (system(cmd) != 0) return -1;
+    FILE *f = fopen("/tmp/flux_remote_head", "r");
+    if (!f) return -1;
+    size_t n = fread(out, 1, outlen - 1, f);
+    out[n] = '\0';
+    fclose(f);
+    remove("/tmp/flux_remote_head");
+    return (n == 40) ? 0 : -1; // a real commit hash, not an empty/error result
+}
+
 // true if pkg is installed and already at the recipe's current version - the
 // only case a plain (non -f) install should skip; a version mismatch means
 // an update is available and should proceed without needing -f
 static int is_installed_and_current(const char *pkg, const flux_recipe_t *recipe) {
     flux_pkg_info_t info;
     if (flux_db_read_info(pkg, &info) != FLUX_ERR_NONE) return 0;
-    return strcmp(info.version, recipe->version) == 0;
+    if (strcmp(info.version, recipe->version) != 0) return 0;
+
+    // a floating source (git+URL#branch with no sha256 pin) never gets a version bump
+    // just because upstream moved - it's meant to always track that branch's latest
+    // commit instead, so compare against the remote's actual HEAD rather than trusting
+    // the recipe's own unchanged version string
+    if (strncmp(recipe->url, "git+", 4) == 0 && strlen(recipe->sha256) == 0) {
+        char git_url[512], git_ref[256], remote_head[65] = {0};
+        split_git_source(recipe->url, git_url, sizeof(git_url), git_ref, sizeof(git_ref));
+        if (resolve_git_remote_head(git_url, git_ref, remote_head, sizeof(remote_head)) == 0) {
+            if (strcmp(remote_head, info.git_commit) != 0) return 0;
+        }
+        // an ls-remote failure (offline, etc.) falls through and trusts the existing
+        // install rather than hard-failing a plain "flux install" over a network hiccup
+    }
+
+    return 1;
 }
 
 static int queue_contains(flux_install_queue_t *q, const char *name) {
@@ -691,6 +744,11 @@ int flux_install(int argc, char **argv, const char *usage) {
     int has_install_hook = (strlen(recipe.hook_install) != 0);
     // pure meta-package: no source to fetch and no install hook to run
     int pure_meta = !has_source && !has_install_hook;
+    // a git+URL#branch source with no sha256 pin always tracks that branch's latest
+    // commit rather than a specific one - the name+version+cflags cache key has no way
+    // to reflect "which commit", so caching one of these would just keep serving
+    // whatever commit happened to build first, forever
+    int is_floating_git = (has_source && strncmp(recipe.url, "git+", 4) == 0 && strlen(recipe.sha256) == 0);
 
     // meta-packages are never marked installed; they're always re-walked so their deps and hooks can pick up changes.
     // a plain install (no -f) still proceeds when the recipe version has moved past what's installed - only an
@@ -714,7 +772,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     char cache_path[FLUX_MAX_PATH_LEN];
     int cache_hit = 0;
 
-    if (has_source) {
+    if (has_source && !is_floating_git) {
         // NULL target: flux install is always native, and gcc -dumpmachine's output here would
         // otherwise depend on whether gcc itself happens to be installed *yet* at this exact point
         // in the sequence - see the matching comment in collect_deps() above
@@ -806,6 +864,7 @@ int flux_install(int argc, char **argv, const char *usage) {
 
     char build_dir[256];
     char tarball[512];
+    char git_resolved_commit[65] = {0}; // set below for a git+ source, stays empty otherwise
 
     snprintf(build_dir, sizeof(build_dir), "/tmp/flux-build/%s", pkg);
     tarball[0] = '\0';
@@ -817,20 +876,8 @@ int flux_install(int argc, char **argv, const char *usage) {
     int is_git = (has_source && strncmp(recipe.url, "git+", 4) == 0);
 
     if (is_git) {
-        const char *git_url_start = recipe.url + 4;
-        char git_url[512];
-        char git_branch[256] = "";
-        const char *hash = strchr(git_url_start, '#');
-        if (hash) {
-            size_t url_len = (size_t)(hash - git_url_start);
-            if (url_len >= sizeof(git_url)) url_len = sizeof(git_url) - 1;
-            strncpy(git_url, git_url_start, url_len);
-            git_url[url_len] = '\0';
-            strncpy(git_branch, hash + 1, sizeof(git_branch) - 1);
-        } else {
-            strncpy(git_url, git_url_start, sizeof(git_url) - 1);
-            git_url[sizeof(git_url) - 1] = '\0';
-        }
+        char git_url[512], git_branch[256];
+        split_git_source(recipe.url, git_url, sizeof(git_url), git_branch, sizeof(git_branch));
 
         flux_step("cloning: %s", git_url);
         char clone_cmd[2048];
@@ -848,22 +895,22 @@ int flux_install(int argc, char **argv, const char *usage) {
             return FLUX_ERR_NETWORK;
         }
 
-        if (strlen(recipe.sha256) > 0) {
-            flux_step("verifying commit...");
-            char sha_cmd[640];
-            snprintf(sha_cmd, sizeof(sha_cmd),
-                     "git -C \"%s\" rev-parse HEAD | tr -d '\\n' > /tmp/flux_hash_actual", build_dir);
-            system(sha_cmd);
-            FILE *hf = fopen("/tmp/flux_hash_actual", "r");
-            if (!hf) return FLUX_ERR_GENERAL;
-            char actual[65] = {0};
-            fread(actual, 1, 64, hf);
+        // recorded regardless of whether sha256 is set, so a floating source (no pin)
+        // has something to compare its next remote check against
+        char sha_cmd[640];
+        snprintf(sha_cmd, sizeof(sha_cmd),
+                 "git -C \"%s\" rev-parse HEAD | tr -d '\\n' > /tmp/flux_hash_actual", build_dir);
+        system(sha_cmd);
+        FILE *hf = fopen("/tmp/flux_hash_actual", "r");
+        if (hf) {
+            fread(git_resolved_commit, 1, 64, hf);
             fclose(hf);
-            remove("/tmp/flux_hash_actual");
-            if (strcmp(actual, recipe.sha256) != 0) {
-                flux_err("commit mismatch (expected %s, got %s)", recipe.sha256, actual);
-                return FLUX_ERR_GENERAL;
-            }
+        }
+        remove("/tmp/flux_hash_actual");
+
+        if (strlen(recipe.sha256) > 0 && strcmp(git_resolved_commit, recipe.sha256) != 0) {
+            flux_err("commit mismatch (expected %s, got %s)", recipe.sha256, git_resolved_commit);
+            return FLUX_ERR_GENERAL;
         }
     } else if (has_source) {
         const char *url_basename = strrchr(recipe.url, '/');
@@ -952,6 +999,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     strncpy(info.name,    recipe.name,    FLUX_MAX_NAME_LEN - 1);
     strncpy(info.version, recipe.version, FLUX_MAX_VERSION_LEN - 1);
     strncpy(info.source,  "kotodama",      sizeof(info.source) - 1);
+    strncpy(info.git_commit, git_resolved_commit, sizeof(info.git_commit) - 1);
     strftime(info.install_date, sizeof(info.install_date), "%Y-%m-%d %H:%M:%S", t);
     info.auto_installed = g_auto_installed;
     flux_db_register(&info, file_ptrs, file_count);

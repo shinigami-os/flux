@@ -108,6 +108,8 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     fprintf(f, "install_date = %s\n", info->install_date);
     fprintf(f, "auto_installed = %d\n", info->auto_installed);
     fprintf(f, "source = %s\n", info->source);
+    if (info->git_commit[0] != '\0')
+        fprintf(f, "git_commit = %s\n", info->git_commit);
     fclose(f);
 
     char files_path[FLUX_MAX_PATH_LEN + 8];
@@ -405,6 +407,7 @@ int flux_db_read_info(const char *name, flux_pkg_info_t *info) {
         if (strcmp(key, "install_date") == 0) strncpy(info->install_date, val, sizeof(info->install_date) - 1);
         if (strcmp(key, "auto_installed") == 0) info->auto_installed = atoi(val);
         if (strcmp(key, "source") == 0) strncpy(info->source, val, sizeof(info->source) - 1);
+        if (strcmp(key, "git_commit") == 0) strncpy(info->git_commit, val, sizeof(info->git_commit) - 1);
     }
     fclose(f);
     if (info->source[0] == '\0') strncpy(info->source, "kotodama", sizeof(info->source) - 1);
