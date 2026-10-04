@@ -208,7 +208,16 @@ typedef struct {
     // across the entire dependency graph, not just one package's own D: line - see alpine_resolve_deps()
     char claimed_providers[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
     int claimed_count;
+    // the names the user actually typed, as opposed to whatever dependency walk pulled in
+    char **roots;
+    int root_count;
 } collect_ctx_t;
+
+static int is_requested_root(const collect_ctx_t *ctx, const char *pkg) {
+    for (int i = 0; i < ctx->root_count; i++)
+        if (strcmp(ctx->roots[i], pkg) == 0) return 1;
+    return 0;
+}
 
 static int ensure_alpine_repos(collect_ctx_t *ctx) {
     if (ctx->repos_loaded) return FLUX_ERR_NONE;
@@ -271,6 +280,20 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
                 strncpy(ctx->claimed_providers[ctx->claimed_count++], real_name, FLUX_MAX_NAME_LEN - 1);
         }
 
+        // already satisfied: same Alpine version installed, or (for a dependency only) any build of the
+        // name at all - mirrors try_alpine_install()'s own skip rules, but decided here so an installed
+        // tree never gets queued, listed, or downloaded in the first place
+        if (flux_db_is_installed(real_name)) {
+            flux_pkg_info_t info;
+            if (flux_db_read_info(real_name, &info) == FLUX_ERR_NONE) {
+                int requested = is_requested_root(ctx, pkg);
+                int forced = g_force && requested;
+                int same_alpine = strcmp(info.source, "alpine") == 0 && strcmp(info.version, p->version) == 0;
+                int other_provenance_dep = strcmp(info.source, "alpine") != 0 && !requested;
+                if (!forced && (same_alpine || other_provenance_dep)) return FLUX_ERR_NONE;
+            }
+        }
+
         char dep_names[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
         int dep_count = 0;
         char conflicts[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
@@ -328,9 +351,8 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
 
     int has_source = (strlen(recipe.url) != 0);
 
-    // g_force is only set for the root package, which is what makes a force-reinstall still walk its current deps and pick up ones a newer recipe version added (e.g. sleex gaining sleex-ui-kit).
-    // a plain install (no -f) still walks past an installed dep whose recipe version moved on, same as the root package below - only a dep that's installed AND current gets skipped
-    if (has_source && !g_force && is_installed_and_current(pkg, &recipe)) return FLUX_ERR_NONE;
+    // -f only applies to what the user typed: a forced root still walks its deps (picking up ones a newer recipe added), but a dep that's installed and current is always skipped
+    if (has_source && !(g_force && is_requested_root(ctx, pkg)) && is_installed_and_current(pkg, &recipe)) return FLUX_ERR_NONE;
 
     // decide whether THIS package needs its own build deps pulled in.
     int has_install_hook = (strlen(recipe.hook_install) != 0);
@@ -1008,6 +1030,8 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
     collect_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.config = config;
+    ctx.roots = argv;
+    ctx.root_count = argc;
 
     for (int i = 0; i < argc; i++) {
         if (flux_is_kira_pkg(argv[i])) {
