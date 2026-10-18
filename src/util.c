@@ -543,6 +543,7 @@ static int files_are_identical(const char *a, const char *b) {
 }
 
 int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count, const char *staged_destdir,
+                               const char direct_deps[][ALPINE_MAX_NAME_LEN], int direct_dep_count,
                                char *owner_out, size_t owner_outlen,
                                char *colliding_path_out, size_t path_outlen) {
     char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
@@ -551,6 +552,11 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
 
     for (int i = 0; i < name_count; i++) {
         if (strcmp(names[i], pkg) == 0) continue; // own prior files, an upgrade reuses them
+
+        int is_direct_dep = 0;
+        for (int d = 0; d < direct_dep_count; d++)
+            if (strcmp(names[i], direct_deps[d]) == 0) { is_direct_dep = 1; break; }
+        if (is_direct_dep) continue; // pkg's own file legitimately supersedes its dependency's copy
 
         char files_path[FLUX_MAX_PATH_LEN + 8];
         snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", names[i]);

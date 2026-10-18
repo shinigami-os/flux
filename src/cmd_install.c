@@ -458,8 +458,20 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     const alpine_pkg_t *p = alpine_repos_find_by_name(repos, pkg, &found_repo);
     alpine_pkg_t found;
     memset(&found, 0, sizeof(found));
+    // found's own direct Alpine deps, resolved now while repos (and found.depends_raw,
+    // which points into it) are still alive - used below to tell a real file collision
+    // between two unrelated packages apart from a dev package simply re-shipping a file
+    // that its own declared dependency already owns (e.g. mariadb-dev depending on, and
+    // overlapping with, mariadb-connector-c-dev - expected, not a packaging mistake)
+    char direct_deps[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
+    int direct_dep_count = 0;
     if (p) {
         found = *p;
+        char dummy_conflicts[ALPINE_MAX_RESOLVED_DEPS][ALPINE_MAX_NAME_LEN];
+        int dummy_conflict_count = 0;
+        alpine_resolve_deps(repos, &found, NULL, 0,
+                             direct_deps, ALPINE_MAX_RESOLVED_DEPS, &direct_dep_count,
+                             dummy_conflicts, ALPINE_MAX_RESOLVED_DEPS, &dummy_conflict_count);
         // repos may be freed below; these point into its raw_text and are never needed past this line
         found.depends_raw = NULL;
         found.provides_raw = NULL;
@@ -556,6 +568,7 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     // checked, and any trigger scripts surfaced, BEFORE anything touches the real root
     char conflict_owner[FLUX_MAX_NAME_LEN], conflict_path[FLUX_MAX_PATH_LEN];
     if (flux_check_file_conflicts(found.name, file_ptrs, file_count, destdir,
+                                   (const char (*)[ALPINE_MAX_NAME_LEN])direct_deps, direct_dep_count,
                                    conflict_owner, sizeof(conflict_owner),
                                    conflict_path, sizeof(conflict_path)) != FLUX_ERR_NONE) {
         flux_err("'%s' conflicts with already-installed '%s' over %s", found.name, conflict_owner, conflict_path);

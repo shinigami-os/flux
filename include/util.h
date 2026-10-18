@@ -29,10 +29,13 @@ int flux_is_kira_pkg(const char *name);
 
 // true if any of `paths` is already owned by another installed package (pkg's own prior files don't count) with
 // different content than the incoming one - matching apk's own tolerance, two packages legitimately shipping the
-// same byte-identical file (e.g. mariadb-dev and mariadb-connector-c-dev's shared client headers) isn't a conflict.
-// staged_destdir is where the incoming files were already extracted to, so their content is available to compare.
-// fills owner_out/colliding_path_out on collision
+// same byte-identical file isn't a conflict, and neither is pkg overwriting a file owned by one of its own direct
+// Alpine dependencies (direct_deps/direct_dep_count, may be NULL/0): e.g. mariadb-dev depends on and overlaps with
+// mariadb-connector-c-dev's shared client headers, and the two sometimes drift out of byte-sync in Alpine edge -
+// still fine, mariadb-dev's own copy is the one it was built to ship. staged_destdir is where the incoming files
+// were already extracted to, so their content is available to compare. fills owner_out/colliding_path_out on collision
 int flux_check_file_conflicts(const char *pkg, const char **paths, int path_count, const char *staged_destdir,
+                               const char direct_deps[][ALPINE_MAX_NAME_LEN], int direct_dep_count,
                                char *owner_out, size_t owner_outlen,
                                char *colliding_path_out, size_t path_outlen);
 
