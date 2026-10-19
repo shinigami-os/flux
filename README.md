@@ -136,10 +136,10 @@ cross_toolchain_path = /opt/musl-cross/bin
 cross_gcc_libpath = /opt/musl-cross/lib/gcc/x86_64-linux-musl/9.4.0
 package_target = x86_64-linux-musl
 alpine_mirror_url = https://dl-cdn.alpinelinux.org/alpine
-alpine_branch = edge
+alpine_branch = latest-stable
 ```
 
-`alpine_mirror_url`/`alpine_branch` default to Alpine's own CDN and the `edge` branch if left unset - set `alpine_branch = stable` to track Alpine's stable branch instead.
+`alpine_mirror_url`/`alpine_branch` default to Alpine's own CDN and the `edge` branch if left unset. `latest-stable` (what Kira itself ships, in `kira-base`'s own `flux.conf`) is a real path on Alpine's CDN, not a placeholder - it always points at whatever Alpine's current stable release is, so it tracks forward on its own without ever needing to be bumped by hand. A specific version also works directly, e.g. `alpine_branch = v3.22`.
 
 `flux update` always clones/syncs `flux-recipes`' GitHub default branch (`FLUX_RECIPES_REPO_URL`, compiled into `include/flux.h`) - there is no config option to pick a different one. Note `remote_repo_url` above is parsed but not currently used for anything.
 
