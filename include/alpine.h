@@ -42,6 +42,16 @@ typedef struct {
     char *raw_text;
     alpine_pkg_t *pkgs;
     int count;
+    // pointers into pkgs[] above, sorted by name and deduplicated (a handful of real Alpine
+    // community packages do have two stanzas under the same name - keeping the first-occurring
+    // one here matches what a linear scan over pkgs[] in file order would have found, since a
+    // plain post-sort bsearch gives no guarantee which of several equal-keyed entries it lands
+    // on). alpine_index_find binary searches this instead of scanning pkgs[] itself - with up to
+    // ALPINE_MAX_INDEX_PKGS (24000) real entries and this called from inside dependency-resolution
+    // loops that are themselves O(installed-count) or worse, the linear scan was the dominant cost
+    // by a wide margin. may be NULL (empty index or allocation failure); find() reports nothing found
+    alpine_pkg_t **sorted;
+    int sorted_count; // <= count; see dedup above
 } alpine_index_t;
 
 int alpine_arch_from_target(const char *package_target, char *out, size_t outlen);

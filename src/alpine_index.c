@@ -83,6 +83,30 @@ static int verify_and_extract_index(const char *tar_gz_path, char *out_index_pat
     return FLUX_ERR_NONE;
 }
 
+// sorting only - never used for bsearch's own comparisons. The tie-break matters for making
+// the sort deterministic across a duplicate name, but it would break searching outright: once
+// strcmp reports a name match (c == 0), falling through to compare the search key's own (always
+// distinct, unrelated) address against the candidate's would make the comparator report "not
+// equal" for literally every match, since the two are never the same object - bsearch would then
+// never see the 0 it needs to report found, and every lookup would silently return NULL.
+static int pkg_ptr_sort_cmp(const void *a, const void *b) {
+    const alpine_pkg_t *const *pa = a;
+    const alpine_pkg_t *const *pb = b;
+    int c = strcmp((*pa)->name, (*pb)->name);
+    if (c != 0) return c;
+    // stable tie-break for a duplicate name: both pointers are into the same contiguous
+    // pkgs[] array, so comparing them directly recovers original (file) order exactly
+    return (*pa) < (*pb) ? -1 : ((*pa) > (*pb) ? 1 : 0);
+}
+
+// bsearch only - compares by name alone. sorted[] is already deduplicated by the time anything
+// searches it, so there's never a tie left to break here.
+static int pkg_ptr_name_cmp(const void *a, const void *b) {
+    const alpine_pkg_t *const *pa = a;
+    const alpine_pkg_t *const *pb = b;
+    return strcmp((*pa)->name, (*pb)->name);
+}
+
 int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
     memset(index, 0, sizeof(*index));
 
@@ -151,21 +175,47 @@ int alpine_index_load(const char *tar_gz_path, alpine_index_t *index) {
     index->raw_text = buf;
     index->pkgs = pkgs;
     index->count = count;
+
+    index->sorted = malloc(sizeof(alpine_pkg_t *) * (size_t)count);
+    index->sorted_count = 0;
+    if (index->sorted) {
+        for (int i = 0; i < count; i++) index->sorted[i] = &pkgs[i];
+        qsort(index->sorted, (size_t)count, sizeof(alpine_pkg_t *), pkg_ptr_sort_cmp);
+        int unique = 0;
+        for (int i = 0; i < count; i++) {
+            if (unique > 0 && strcmp(index->sorted[unique - 1]->name, index->sorted[i]->name) == 0) continue;
+            index->sorted[unique++] = index->sorted[i];
+        }
+        index->sorted_count = unique;
+    }
     return FLUX_ERR_NONE;
 }
 
 void alpine_index_free(alpine_index_t *index) {
     free(index->pkgs);
     free(index->raw_text);
+    free(index->sorted);
     index->pkgs = NULL;
     index->raw_text = NULL;
+    index->sorted = NULL;
     index->count = 0;
+    index->sorted_count = 0;
 }
 
 alpine_pkg_t *alpine_index_find(alpine_index_t *index, const char *name) {
-    for (int i = 0; i < index->count; i++)
-        if (strcmp(index->pkgs[i].name, name) == 0) return &index->pkgs[i];
-    return NULL;
+    if (!index->sorted || index->sorted_count == 0) return NULL;
+
+    alpine_pkg_t key;
+    strncpy(key.name, name, sizeof(key.name) - 1);
+    key.name[sizeof(key.name) - 1] = '\0';
+    alpine_pkg_t *keyptr = &key;
+
+    // the key's own address has no meaningful relationship to pkgs[]'s layout, so the tie-break
+    // half of pkg_ptr_name_cmp is never exercised here - fine, since sorted[] is already
+    // deduplicated and every name in it is unique, there's nothing left to tie-break between
+    alpine_pkg_t **found = bsearch(&keyptr, index->sorted, (size_t)index->sorted_count,
+                                    sizeof(alpine_pkg_t *), pkg_ptr_name_cmp);
+    return found ? *found : NULL;
 }
 
 int alpine_parse_dep_line(const char *raw, alpine_dep_t *out, int max, int *count) {
