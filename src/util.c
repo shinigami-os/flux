@@ -566,57 +566,6 @@ int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count)
     return FLUX_ERR_NONE;
 }
 
-// Only checks runtime deps, not build deps - a package's build deps are a
-// one-time need already satisfied by the time it's sitting installed, not
-// an ongoing reason to keep anything else around. Treating build= as equally
-// permanent was the original reason gcc/cmake/ninja/every -dev package a
-// from-source kira-* build pulls in never got cleaned up: the consuming
-// package's own recipe always lists them, so the old check considered them
-// "needed" forever.
-//
-// pkg_name can be either a kira-* package (checked against its local
-// kotodama runtime= list) or a plain Alpine-resolved package, which has no
-// local kotodama file at all - those are checked against the real D: line
-// from the cached Alpine index instead. Conflating the two (or silently
-// treating "no kotodama file" as "no dependencies") is what caused
-// autoremove to remove real runtime dependencies of ordinary Alpine
-// packages: nothing being a local recipe was reporting them as needed.
-int flux_pkg_runtime_depends_on(const char *pkg_name, const char *dep_name,
-                                 const flux_config_t *config, const alpine_repos_t *repos) {
-    if (flux_is_kira_pkg(pkg_name)) {
-        char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
-        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg_name);
-
-        flux_recipe_t recipe;
-        memset(&recipe, 0, sizeof(recipe));
-        if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return 0;
-
-        for (int i = 0; i < FLUX_MAX_RDEPS; i++)
-            if (strcmp(recipe.rdeps[i], dep_name) == 0) return 1;
-        return 0;
-    }
-
-    const alpine_pkg_t *pkg = alpine_repos_find_by_name(repos, pkg_name, NULL);
-    if (!pkg) return 0;
-
-    alpine_dep_t tokens[ALPINE_MAX_TOKENS_PER_LINE];
-    int count = 0;
-    alpine_parse_dep_line(pkg->depends_raw, tokens, ALPINE_MAX_TOKENS_PER_LINE, &count);
-
-    const alpine_pkg_t *dep_pkg = alpine_repos_find_by_name(repos, dep_name, NULL);
-
-    for (int i = 0; i < count; i++) {
-        if (tokens[i].token[0] == '!') continue; // "!pkg" is a conflict, not a dependency
-        char bare[ALPINE_MAX_DEP_TOKEN_LEN];
-        alpine_strip_constraint(tokens[i].token, bare, sizeof(bare));
-        if (strcmp(bare, dep_name) == 0) return 1;
-        // the dependency line can name a capability (so:/cmd:/pc:, or a bare
-        // virtual name) that dep_name provides under a different name
-        if (dep_pkg && alpine_provides_matches(dep_pkg->provides_raw, bare)) return 1;
-    }
-    return 0;
-}
-
 static int files_are_identical(const char *a, const char *b) {
     char cmd[FLUX_MAX_PATH_LEN * 2 + 32];
     snprintf(cmd, sizeof(cmd), "cmp -s \"%s\" \"%s\"", a, b);
@@ -690,6 +639,74 @@ static int flux_pkg_is_protected(const char *name) {
     return 0;
 }
 
+// the parsed form of one package's own declared runtime deps - either a kotodama recipe's rdeps,
+// or an Alpine package's tokenized D: line. Building this is the expensive part (a disk read and
+// a full parse_kotodama for a kira-* package, a tokenize pass for an Alpine one) - caching it once
+// per package per pass instead of once per *comparison* is what turns autoremove's old O(n^2) pile
+// of re-parses (with real installed counts in the hundreds, compounded by up to 50 passes) into O(n)
+typedef struct {
+    int valid;    // false if the recipe/package lookup itself failed - treated as "declares nothing"
+    int is_kira;
+    char rdeps[FLUX_MAX_RDEPS][FLUX_MAX_NAME_LEN];
+    alpine_dep_t tokens[ALPINE_MAX_TOKENS_PER_LINE];
+    int token_count;
+} pkg_dep_cache_t;
+
+// Only checks runtime deps, not build deps - a package's build deps are a
+// one-time need already satisfied by the time it's sitting installed, not
+// an ongoing reason to keep anything else around. Treating build= as equally
+// permanent was the original reason gcc/cmake/ninja/every -dev package a
+// from-source kira-* build pulls in never got cleaned up: the consuming
+// package's own recipe always lists them, so the old check considered them
+// "needed" forever.
+//
+// pkg_name can be either a kira-* package (checked against its local
+// kotodama runtime= list) or a plain Alpine-resolved package, which has no
+// local kotodama file at all - those are checked against the real D: line
+// from the cached Alpine index instead. Conflating the two (or silently
+// treating "no kotodama file" as "no dependencies") is what caused
+// autoremove to remove real runtime dependencies of ordinary Alpine
+// packages: nothing being a local recipe was reporting them as needed.
+static void build_dep_cache(const char *pkg_name, const flux_config_t *config, const alpine_repos_t *repos,
+                             pkg_dep_cache_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (flux_is_kira_pkg(pkg_name)) {
+        out->is_kira = 1;
+        char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg_name);
+        flux_recipe_t recipe;
+        memset(&recipe, 0, sizeof(recipe));
+        if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) return;
+        memcpy(out->rdeps, recipe.rdeps, sizeof(out->rdeps));
+        out->valid = 1;
+        return;
+    }
+    const alpine_pkg_t *pkg = alpine_repos_find_by_name(repos, pkg_name, NULL);
+    if (!pkg) return;
+    alpine_parse_dep_line(pkg->depends_raw, out->tokens, ALPINE_MAX_TOKENS_PER_LINE, &out->token_count);
+    out->valid = 1;
+}
+
+// same matching rules as the old per-pair flux_pkg_runtime_depends_on, just reading from an
+// already-built cache instead of re-parsing/re-tokenizing pkg_cache's own source on every call
+static int cached_depends_on(const pkg_dep_cache_t *pkg_cache, const char *dep_name, const alpine_repos_t *repos) {
+    if (!pkg_cache->valid) return 0;
+    if (pkg_cache->is_kira) {
+        for (int i = 0; i < FLUX_MAX_RDEPS; i++)
+            if (strcmp(pkg_cache->rdeps[i], dep_name) == 0) return 1;
+        return 0;
+    }
+    const alpine_pkg_t *dep_pkg = alpine_repos_find_by_name(repos, dep_name, NULL);
+    for (int i = 0; i < pkg_cache->token_count; i++) {
+        if (pkg_cache->tokens[i].token[0] == '!') continue;
+        char bare[ALPINE_MAX_DEP_TOKEN_LEN];
+        alpine_strip_constraint(pkg_cache->tokens[i].token, bare, sizeof(bare));
+        if (strcmp(bare, dep_name) == 0) return 1;
+        if (dep_pkg && alpine_provides_matches(dep_pkg->provides_raw, bare)) return 1;
+    }
+    return 0;
+}
+
 int flux_autoremove_orphans(int *removed_count, int dry_run) {
     *removed_count = 0;
 
@@ -712,11 +729,23 @@ int flux_autoremove_orphans(int *removed_count, int dry_run) {
     char removed_names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
     int removed_names_count = 0;
 
+    // heap, not stack: each entry is ~35KB (ALPINE_MAX_TOKENS_PER_LINE is a generous upper bound,
+    // not a typical count) - FLUX_MAX_INSTALL_QUEUE of them is tens of MB, far past a sane stack frame
+    pkg_dep_cache_t *cache = malloc((size_t)FLUX_MAX_INSTALL_QUEUE * sizeof(pkg_dep_cache_t));
+    if (!cache) {
+        alpine_repos_free(&repos);
+        return FLUX_ERR_GENERAL;
+    }
+
     // repeat until a pass removes nothing, so a chain of newly-orphaned deps gets cleaned up in one call
     for (int pass = 0; pass < 50; pass++) {
         char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
         int count = 0;
         flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &count);
+
+        // built once per pass (declared deps don't change mid-pass), not once per comparison
+        for (int j = 0; j < count; j++)
+            build_dep_cache(names[j], &config, &repos, &cache[j]);
 
         int removed_this_pass = 0;
         for (int i = 0; i < count; i++) {
@@ -737,7 +766,7 @@ int flux_autoremove_orphans(int *removed_count, int dry_run) {
                 for (int k = 0; k < removed_names_count; k++)
                     if (strcmp(removed_names[k], names[j]) == 0) { j_already_decided = 1; break; }
                 if (j_already_decided) continue; // already decided to remove j, can't be a reason to keep i
-                if (flux_pkg_runtime_depends_on(names[j], names[i], &config, &repos)) { needed = 1; break; }
+                if (cached_depends_on(&cache[j], names[i], &repos)) { needed = 1; break; }
             }
             if (needed) continue;
 
@@ -754,6 +783,7 @@ int flux_autoremove_orphans(int *removed_count, int dry_run) {
         }
         if (removed_this_pass == 0) break;
     }
+    free(cache);
     alpine_repos_free(&repos);
     return FLUX_ERR_NONE;
 }
@@ -1066,6 +1096,7 @@ int flux_download_batch(const flux_download_item_t *items, int count) {
     const char *reset = flux_colors_enabled() ? "\033[0m" : "";
     const int bar_w = 30;
     long done_bytes = 0;
+    int any_failed = 0;
 
     printf("Downloading %d packages...\n", count);
     fflush(stdout);
@@ -1120,15 +1151,20 @@ int flux_download_batch(const flux_download_item_t *items, int count) {
 
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
             if (tty) printf("\r\033[K");
-            flux_err("failed to download %s", base);
-            return FLUX_ERR_NETWORK;
+            // one flaky/dead mirror shouldn't cost every other package in the batch its own
+            // download - each package's own install step re-attempts its fetch anyway if the
+            // file isn't already sitting here (see alpine_apk_download), so this is never the
+            // last chance to get it; just note it and move on to the rest of the batch
+            flux_warn("failed to download %s, will retry during install", base);
+            any_failed = 1;
+            continue;
         }
 
         struct stat fst;
         done_bytes += (stat(items[i].dest, &fst) == 0) ? (long)fst.st_size : (totals[i] > 0 ? totals[i] : 0);
     }
     if (tty) printf("\r\033[K");
-    return FLUX_ERR_NONE;
+    return any_failed ? FLUX_ERR_NETWORK : FLUX_ERR_NONE;
 }
 
 // count-based progress bar for the install phase (no byte stream to sample, just discrete

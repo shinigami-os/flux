@@ -1215,11 +1215,11 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
 
     if (download_count > 0) {
         system("mkdir -p /tmp/flux-build");
-        if (flux_download_batch(downloads, download_count) != FLUX_ERR_NONE) {
-            flux_err("failed to download packages");
-            alpine_repos_free(&ctx.repos);
-            return FLUX_ERR_NETWORK;
-        }
+        // a non-NONE return here just means one or more items didn't pre-fetch - not fatal,
+        // since each package's own install step below retries its own download if the file
+        // isn't already there (see alpine_apk_download); only a package that fails *that*
+        // retry too actually fails, same as any other individual install failure
+        flux_download_batch(downloads, download_count);
     }
 
     // install phase: quiet unless -v, one shared progress bar in place of
@@ -1229,7 +1229,15 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
     flux_batch_progress_begin(queue.count);
 
     int saved_force = g_force;
-    int overall_err = FLUX_ERR_NONE;
+    // one bad package (a dead mirror, a build that doesn't compile on this machine, whatever)
+    // used to abort every package queued after it, including ones with nothing to do with the
+    // failure - each is now attempted regardless, and everything that didn't make it is reported
+    // together at the end instead of stopping the batch at the first name that fails
+    char failed_names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int failed_root_err[FLUX_MAX_INSTALL_QUEUE];
+    int failed_is_root[FLUX_MAX_INSTALL_QUEUE];
+    int failed_count = 0;
+    int installed_count = 0;
     g_active_repos = &ctx.repos;
     for (int i = 0; i < queue.count; i++) {
         int is_root = 0;
@@ -1244,17 +1252,32 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
         int err = flux_install(1, one_argv, "flux install <pkg>");
         g_skip_deps = 0;
         if (err != FLUX_ERR_NONE) {
-            flux_batch_progress_end();
-            if (quiet) flux_set_quiet(0);
-            flux_err("failed to install '%s'", queue.pkgs[i].name);
-            overall_err = is_root ? err : FLUX_ERR_DEPENDENCY;
-            break;
+            if (failed_count < FLUX_MAX_INSTALL_QUEUE) {
+                strncpy(failed_names[failed_count], queue.pkgs[i].name, FLUX_MAX_NAME_LEN - 1);
+                failed_root_err[failed_count] = err;
+                failed_is_root[failed_count] = is_root;
+                failed_count++;
+            }
+        } else {
+            installed_count++;
         }
     }
-    if (overall_err == FLUX_ERR_NONE) {
-        flux_batch_progress_end();
-        if (quiet) flux_set_quiet(0);
+    flux_batch_progress_end();
+    if (quiet) flux_set_quiet(0);
+
+    if (failed_count == 0) {
         flux_ok("%d packages installed", queue.count);
+    } else {
+        flux_ok("%d/%d packages installed", installed_count, queue.count);
+        flux_err("failed to install:");
+        for (int i = 0; i < failed_count; i++)
+            printf("  %s%s\n", failed_names[i], failed_is_root[i] ? "" : " (dependency)");
+    }
+
+    int overall_err = FLUX_ERR_NONE;
+    for (int i = 0; i < failed_count; i++) {
+        if (failed_is_root[i]) { overall_err = failed_root_err[i]; break; } // a root's own failure is the most specific error to surface
+        if (overall_err == FLUX_ERR_NONE) overall_err = FLUX_ERR_DEPENDENCY;
     }
 
     g_auto_installed = 0;

@@ -21,7 +21,6 @@ int flux_db_list_installed(char names[][FLUX_MAX_NAME_LEN], int max, int *count)
 void flux_split_git_source(const char *url, char *out_url, size_t out_url_len,
                             char *out_ref, size_t out_ref_len);
 int flux_resolve_git_remote_head(const char *url, const char *ref, char *out, size_t outlen);
-int flux_pkg_runtime_depends_on(const char *pkg_name, const char *dep_name, const flux_config_t *config, const alpine_repos_t *repos);
 int flux_autoremove_orphans(int *removed_count, int dry_run);
 
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
