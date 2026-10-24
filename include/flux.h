@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.10-4"
+#define FLUX_VERSION "26.10-5"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
 // matches flux-recipes' actual GitHub default branch - only needed for the no-git tarball fallback below, git clone/pull just follow the default on their own
@@ -39,7 +39,11 @@
 // already-installed packages were silently hitting the old 4096 cap
 #define FLUX_MAX_INSTALLED_FILES 32768
 // also doubles as the cap on flux_db_list_installed() - a kira-desktop-* meta-package's Alpine deps alone can put a real system's installed count well past the old 256
-#define FLUX_MAX_INSTALL_QUEUE 1024
+// flux_db_list_installed silently stops at this many and reports no error when it does - a
+// real desktop install (1117 packages, observed directly) already exceeds the old 1024, which
+// meant autoremove, the conflict check and batch installs were all silently blind to whichever
+// packages didn't fit. 2048 is double that with room to grow, not an arbitrary round number.
+#define FLUX_MAX_INSTALL_QUEUE 2048
 
 
 typedef int (*flux_cmd_fn)(int argc, char **argv, const char *usage);

@@ -1166,7 +1166,16 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
     // download phase: kira-* plain-tarball sources and Alpine .apk fetches
     // share one global bar - alpine_apk_download()/the kira-* tarball check
     // in flux_install() both recognize an already-fetched file and skip re-downloading it
-    flux_download_item_t downloads[FLUX_MAX_INSTALL_QUEUE];
+    //
+    // heap, not stack: at 520 bytes/entry this is by far the largest of run_install's several
+    // FLUX_MAX_INSTALL_QUEUE-sized arrays - the others stay on the stack, this one alone is
+    // worth moving given how much it multiplies out to
+    flux_download_item_t *downloads = malloc((size_t)FLUX_MAX_INSTALL_QUEUE * sizeof(flux_download_item_t));
+    if (!downloads) {
+        flux_err("out of memory");
+        alpine_repos_free(&ctx.repos);
+        return FLUX_ERR_GENERAL;
+    }
     int download_count = 0;
     char arch[ALPINE_MAX_ARCH_LEN];
     alpine_arch_from_target(config->package_target, arch, sizeof(arch));
@@ -1283,6 +1292,7 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
     g_auto_installed = 0;
     g_active_repos = NULL;
     g_force = saved_force;
+    free(downloads);
     alpine_repos_free(&ctx.repos);
     return overall_err;
 }
