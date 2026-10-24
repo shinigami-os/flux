@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -pedantic -std=c11
 
 .PHONY: clean build install static
 
-OBJS = build/main.o build/util.o build/sha256.o build/cmd_install.o build/cmd_search.o build/cmd_build.o build/cmd_remove.o build/cmd_update.o build/cmd_info.o build/cmd_list.o build/cmd_cache.o build/cmd_autoremove.o build/cmd_diff.o build/cmd_checksum_backfill.o build/cmd_version.o build/cmd_selfupdate.o build/cmd_baseupdate.o build/cmd_kernelupdate.o build/parser.o build/alpine_index.o build/alpine_apk.o build/alpine_verify.o build/alpine_resolve.o build/alpine_triggers.o
+OBJS = build/main.o build/util.o build/sha256.o build/pkg_updates.o build/cmd_install.o build/cmd_search.o build/cmd_build.o build/cmd_remove.o build/cmd_check.o build/cmd_upgrade.o build/cmd_sys.o build/cmd_info.o build/cmd_list.o build/cmd_cache.o build/cmd_autoremove.o build/cmd_checksum_backfill.o build/cmd_version.o build/cmd_selfupdate.o build/cmd_baseupdate.o build/cmd_kernelupdate.o build/parser.o build/alpine_index.o build/alpine_apk.o build/alpine_verify.o build/alpine_resolve.o build/alpine_triggers.o
 
 all: build/flux
 
@@ -13,7 +13,7 @@ build:
 build/flux: $(OBJS) | build
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) -o build/flux
 
-HEADERS = include/alpine.h include/flux.h include/parser.h include/util.h
+HEADERS = include/alpine.h include/flux.h include/parser.h include/util.h include/sha256.h
 
 build/%.o : src/%.c $(HEADERS) | build
 	$(CC) $(CFLAGS) -c $< -o $@

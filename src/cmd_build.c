@@ -10,22 +10,16 @@
 #include "../include/sha256.h"
 
 int flux_build(int argc, char **argv, const char *usage) {
-    if (argc < 1) {
+    // a plain native build/install now goes through 'flux install', which resolves deps,
+    // checks the cache and handles conffiles too - this command only still exists for
+    // producing cross-compiled artifacts into the bootstrap sysroot, which 'install' never does
+    if (argc < 2 || strcmp(argv[0], "--cross") != 0) {
         flux_usage_error(usage);
         return FLUX_ERR_USAGE;
     }
 
-    int cross = 0;
-    int pkg_idx = 0;
-    if (argc >= 1 && strcmp(argv[0], "--cross") == 0) {
-        cross = 1;
-        pkg_idx = 1;
-        if (argc < 2) {
-            flux_usage_error(usage);
-            return FLUX_ERR_USAGE;
-        }
-    }
-    const char *pkg = argv[pkg_idx];
+    int cross = 1;
+    const char *pkg = argv[1];
     double t_start = flux_now_seconds();
 
     flux_config_t config;
@@ -35,7 +29,7 @@ int flux_build(int argc, char **argv, const char *usage) {
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
         flux_err("recipe repo not found at %s", config.local_repo_path);
-        flux_err("hint: run 'flux update' to download the recipe repo");
+        flux_err("hint: run 'flux check' to download the recipe repo");
         return FLUX_ERR_GENERAL;
     }
 

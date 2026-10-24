@@ -241,7 +241,7 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         }
 
         if (ensure_alpine_repos(ctx) != FLUX_ERR_NONE) {
-            flux_err("no Alpine package index cached yet - run 'flux update' first");
+            flux_err("no Alpine package index cached yet - run 'flux check' first");
             return FLUX_ERR_CACHE;
         }
 
@@ -439,7 +439,7 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     alpine_repos_t *repos = g_active_repos;
     if (!repos) {
         if (alpine_repos_load(config, arch, &local_repos) != FLUX_ERR_NONE) {
-            flux_err("no Alpine package index cached yet - run 'flux update' first");
+            flux_err("no Alpine package index cached yet - run 'flux check' first");
             return FLUX_ERR_CACHE;
         }
         repos = &local_repos;
@@ -504,9 +504,9 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
     }
 
     if (!g_auto_installed)
-        flux_action("Installing %s %s", found.name, found.version);
+        flux_action("Installing %s %s (prebuilt, alpine)", found.name, found.version);
     else
-        flux_step("installing dependency: %s %s", found.name, found.version);
+        flux_step("installing dependency: %s %s (prebuilt, alpine)", found.name, found.version);
 
     char apk_path[512];
     flux_step("fetching source...");
@@ -718,7 +718,7 @@ int flux_install(int argc, char **argv, const char *usage) {
     struct stat st;
     if (stat(config.local_repo_path, &st) != 0) {
         flux_err("recipe repo not found at %s", config.local_repo_path);
-        flux_err("hint: run 'flux update' to download the recipe repo");
+        flux_err("hint: run 'flux check' to download the recipe repo");
         return FLUX_ERR_GENERAL;
     }
 
@@ -735,14 +735,6 @@ int flux_install(int argc, char **argv, const char *usage) {
     err = parse_kotodama(&recipe, koto_path);
     if (err != FLUX_ERR_NONE) return err;
 
-    if (!g_auto_installed)
-        flux_action("Installing %s %s", recipe.name, recipe.version);
-    else
-        flux_step("installing dependency: %s %s", recipe.name, recipe.version);
-
-    char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
-    snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
-
     int has_source = (strlen(recipe.url) != 0);
     int has_install_hook = (strlen(recipe.hook_install) != 0);
     // pure meta-package: no source to fetch and no install hook to run
@@ -752,6 +744,15 @@ int flux_install(int argc, char **argv, const char *usage) {
     // to reflect "which commit", so caching one of these would just keep serving
     // whatever commit happened to build first, forever
     int is_floating_git = (has_source && strncmp(recipe.url, "git+", 4) == 0 && strlen(recipe.sha256) == 0);
+
+    const char *source_tag = pure_meta ? "meta-package" : "building from source, kotodama";
+    if (!g_auto_installed)
+        flux_action("Installing %s %s (%s)", recipe.name, recipe.version, source_tag);
+    else
+        flux_step("installing dependency: %s %s (%s)", recipe.name, recipe.version, source_tag);
+
+    char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
+    snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
 
     // meta-packages are never marked installed; they're always re-walked so their deps and hooks can pick up changes.
     // a plain install (no -f) still proceeds when the recipe version has moved past what's installed - only an

@@ -8,34 +8,30 @@ int flux_install(int argc, char **argv, const char *usage);
 int flux_search(int argc, char **argv, const char *usage);
 int flux_build(int argc, char **argv, const char *usage);
 int flux_remove(int argc, char **argv, const char *usage);
-int flux_update(int argc, char **argv, const char *usage);
+int flux_check(int argc, char **argv, const char *usage);
+int flux_upgrade(int argc, char **argv, const char *usage);
 int flux_info(int argc, char **argv, const char *usage);
 int flux_list(int argc, char **argv, const char *usage);
 int flux_cache(int argc, char **argv, const char *usage);
 int flux_autoremove(int argc, char **argv, const char *usage);
 int flux_version(int argc, char **argv, const char *usage);
-int flux_self_update(int argc, char **argv, const char *usage);
-int flux_base_update(int argc, char **argv, const char *usage);
-int flux_kernel_update(int argc, char **argv, const char *usage);
+int flux_sys(int argc, char **argv, const char *usage);
 int flux_checksum_backfill(int argc, char **argv, const char *usage);
-int flux_diff(int argc, char **argv, const char *usage);
 
 flux_cmd_t commands[] = {
     {"install", flux_install, "Install one or more packages (from cache or compile)", "flux install [-y] [-f] [-v] <pkgs>"},
     {"search", flux_search, "Search available recipes", "flux search <query>"},
-    {"build", flux_build, "Force local compilation regardless of cache", "flux build [--cross] <pkg>"},
+    {"build", flux_build, "Cross-compile a kotodama recipe into the bootstrap sysroot", "flux build --cross <pkg>"},
     {"remove", flux_remove, "Remove a package, optionally its orphaned deps", "flux remove [-a] <pkg>"},
     {"autoremove", flux_autoremove, "Remove all orphaned auto-installed dependencies", "flux autoremove [-n|--dry-run]"},
-    {"diff", flux_diff, "List installed files whose content no longer matches what was shipped", "flux diff"},
+    {"check", flux_check, "Check for package updates (read-only; add --files to also check for local modifications)", "flux check [--files]"},
+    {"upgrade", flux_upgrade, "Install whatever 'flux check' found", "flux upgrade"},
     {"checksum-backfill", flux_checksum_backfill, "Record checksums for installed packages that predate conffile protection", "flux checksum-backfill"},
-    {"update", flux_update, "Sync recipe repo, report package updates, and check for newer flux/kira-base releases", "flux update [-i]"},
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},
     {"list", flux_list, "List installed packages", "flux list [-a]"},
     {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
     {"version", flux_version, "Show the installed flux version", "flux version"},
-    {"self-update", flux_self_update, "Rebuild and replace flux from the latest release", "flux self-update [-f]"},
-    {"base-update", flux_base_update, "Update kira-base's core image to the latest release", "flux base-update [-f]"},
-    {"kernel-update", flux_kernel_update, "Update the Shinigami kernel to the latest release", "flux kernel-update [-f]"},
+    {"sys", flux_sys, "Check or upgrade flux itself, kira-base, and the kernel", "flux sys check | flux sys upgrade [flux|base|kernel]"},
     {NULL, NULL, NULL, NULL}
 };
 

@@ -83,6 +83,18 @@ int flux_cache_verify(const char *path, const char *pub_path);
 int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen);
 int flux_fetch_latest_kernel_version(const char *cache_url, char *out, size_t outlen);
 
+// clones/pulls the recipe repo (self-healing a pre-git tarball checkout), printing its own
+// progress/ok. old_head_out/have_old_head_out reflect the repo's HEAD *before* this pull, so a
+// caller can git-diff against it to see which kotodama recipes just changed; both are untouched
+// (have_old_head_out left at whatever the caller passed in) when the repo didn't exist yet.
+int flux_sync_recipe_repo(flux_config_t *config, char *old_head_out, size_t old_head_len, int *have_old_head_out);
+
+// shared by 'flux check' and 'flux upgrade': syncs the recipe repo + Alpine index, then fills
+// outdated with every installed package that has a newer kotodama version, a newer Alpine
+// version, or (for a floating git+ source) a newer upstream commit - printing a table per
+// category along the way, same output either command already showed under the old 'flux update'
+int flux_collect_package_updates(flux_config_t *config, char outdated[][FLUX_MAX_NAME_LEN], int max, int *count);
+
 int flux_colors_enabled(void);
 void flux_set_quiet(int on);   // suppresses flux_step/flux_action/flux_ok while a batch progress bar owns the screen
 int  flux_is_quiet(void);

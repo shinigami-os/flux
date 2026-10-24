@@ -1,0 +1,248 @@
+#define _POSIX_C_SOURCE 200809L
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include "../include/flux.h"
+#include "../include/util.h"
+#include "../include/parser.h"
+#include "../include/alpine.h"
+
+static int get_git_head(const char *repo_path, char *out, size_t outlen) {
+    char cmd[FLUX_MAX_PATH_LEN + 32];
+    snprintf(cmd, sizeof(cmd), "git -C \"%s\" rev-parse HEAD", repo_path);
+    FILE *f = popen(cmd, "r");
+    if (!f) return FLUX_ERR_GENERAL;
+    int ok = (fgets(out, outlen, f) != NULL);
+    pclose(f);
+    if (!ok) return FLUX_ERR_GENERAL;
+    strip_newline(out);
+    return strlen(out) > 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
+}
+
+// only reports changed <pkg>/kotodama files where pkg is installed and its version actually changed - "update available" should only mean something for packages on this system
+static int report_and_collect_kotodama_updates(const flux_config_t *config, const char *old_head, const char *new_head,
+                                                char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    *count = 0;
+
+    char cmd[FLUX_MAX_PATH_LEN + 128];
+    snprintf(cmd, sizeof(cmd), "git -C \"%s\" diff --name-only %s %s -- '*/kotodama'",
+             config->local_repo_path, old_head, new_head);
+    FILE *f = popen(cmd, "r");
+    if (!f) return FLUX_ERR_GENERAL;
+
+    char line[FLUX_MAX_PATH_LEN];
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    while (*count < max && fgets(line, sizeof(line), f)) {
+        strip_newline(line);
+        char *slash = strchr(line, '/');
+        if (!slash || strcmp(slash + 1, "kotodama") != 0) continue;
+        *slash = '\0';
+        const char *pkg = line;
+
+        if (!flux_db_is_installed(pkg)) continue;
+
+        flux_pkg_info_t info;
+        if (flux_db_read_info(pkg, &info) != FLUX_ERR_NONE) continue;
+
+        char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg);
+        flux_recipe_t recipe;
+        memset(&recipe, 0, sizeof(recipe));
+        if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) continue;
+
+        if (strcmp(info.version, recipe.version) == 0) continue;
+
+        strncpy(rows[*count].col1, pkg, FLUX_MAX_NAME_LEN - 1);
+        snprintf(rows[*count].col2, sizeof(rows[*count].col2), "%s -> %s", info.version, recipe.version);
+        strncpy(outdated[*count], pkg, FLUX_MAX_NAME_LEN - 1);
+        (*count)++;
+    }
+    pclose(f);
+
+    if (*count > 0) {
+        char title[64];
+        snprintf(title, sizeof(title), "%d update%s available", *count, *count == 1 ? "" : "s");
+        printf("\n");
+        flux_print_table(title, rows, *count);
+    }
+    return FLUX_ERR_NONE;
+}
+
+// compares each installed alpine-sourced package's recorded version against the just-synced index - "update available" should only mean something for packages on this system
+static void collect_alpine_updates(const alpine_repos_t *repos, char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    if (flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n) != FLUX_ERR_NONE) return;
+
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    int rows_count = 0;
+
+    for (int i = 0; i < n && *count < max; i++) {
+        flux_pkg_info_t info;
+        if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
+        if (strcmp(info.source, "alpine") != 0) continue; // empty/"kotodama" handled by the git-diff based check above
+
+        const alpine_pkg_t *p = alpine_repos_find_by_name(repos, names[i], NULL);
+        if (!p || strcmp(info.version, p->version) == 0) continue;
+
+        strncpy(rows[rows_count].col1, names[i], FLUX_MAX_NAME_LEN - 1);
+        snprintf(rows[rows_count].col2, sizeof(rows[rows_count].col2), "%s -> %s", info.version, p->version);
+        rows_count++;
+        strncpy(outdated[*count], names[i], FLUX_MAX_NAME_LEN - 1);
+        (*count)++;
+    }
+
+    if (rows_count > 0) {
+        char title[64];
+        snprintf(title, sizeof(title), "%d Alpine update%s available", rows_count, rows_count == 1 ? "" : "s");
+        printf("\n");
+        flux_print_table(title, rows, rows_count);
+    }
+}
+
+// a floating git+URL#branch source (no sha256 pin) never gets its own kotodama version
+// bumped just because upstream moved, so the git-diff based check above never sees it -
+// this is the only place that actually notices a rolling source like Sleex has moved on
+static void collect_floating_git_updates(const flux_config_t *config,
+                                          char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    if (flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n) != FLUX_ERR_NONE) return;
+
+    flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
+    int rows_count = 0;
+
+    for (int i = 0; i < n && *count < max; i++) {
+        flux_pkg_info_t info;
+        if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
+        if (strcmp(info.source, "kotodama") != 0) continue;
+
+        char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, names[i]);
+        flux_recipe_t recipe;
+        memset(&recipe, 0, sizeof(recipe));
+        if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) continue;
+        if (strncmp(recipe.url, "git+", 4) != 0 || strlen(recipe.sha256) > 0) continue;
+
+        char git_url[512], git_ref[256], remote_head[65] = {0};
+        flux_split_git_source(recipe.url, git_url, sizeof(git_url), git_ref, sizeof(git_ref));
+        if (flux_resolve_git_remote_head(git_url, git_ref, remote_head, sizeof(remote_head)) != 0) continue;
+        if (strcmp(remote_head, info.git_commit) == 0) continue;
+
+        int already_listed = 0;
+        for (int j = 0; j < *count; j++)
+            if (strcmp(outdated[j], names[i]) == 0) { already_listed = 1; break; }
+        if (already_listed) continue;
+
+        strncpy(rows[rows_count].col1, names[i], FLUX_MAX_NAME_LEN - 1);
+        snprintf(rows[rows_count].col2, sizeof(rows[rows_count].col2), "%.8s -> %.8s", info.git_commit, remote_head);
+        rows_count++;
+        strncpy(outdated[*count], names[i], FLUX_MAX_NAME_LEN - 1);
+        (*count)++;
+    }
+
+    if (rows_count > 0) {
+        char title[64];
+        snprintf(title, sizeof(title), "%d rolling update%s available", rows_count, rows_count == 1 ? "" : "s");
+        printf("\n");
+        flux_print_table(title, rows, rows_count);
+    }
+}
+
+int flux_sync_recipe_repo(flux_config_t *config, char *old_head_out, size_t old_head_len, int *have_old_head_out) {
+    char git_dir[FLUX_MAX_PATH_LEN + 8];
+    snprintf(git_dir, sizeof(git_dir), "%s/.git", config->local_repo_path);
+    struct stat st;
+
+    if (stat(git_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        // self-heals a leftover tarball checkout from before git existed
+        if (system("command -v git >/dev/null 2>&1") == 0) {
+            flux_step("cloning recipe repo...");
+
+            char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
+            snprintf(cmd, sizeof(cmd),
+                    "rm -rf \"%s\" && git clone --depth 1 \"%s\" \"%s\"",
+                    config->local_repo_path, FLUX_RECIPES_REPO_URL, config->local_repo_path);
+            if (system(cmd) != 0) {
+                flux_err("failed to clone recipe repo");
+                return FLUX_ERR_NETWORK;
+            }
+        } else {
+            flux_step("downloading recipe repo...");
+
+            char tmp_tar[FLUX_MAX_PATH_LEN];
+            snprintf(tmp_tar, sizeof(tmp_tar), "/tmp/flux-recipes.tar.gz");
+
+            char archive_url[FLUX_MAX_URL_LEN + 32];
+            snprintf(archive_url, sizeof(archive_url), "%s/archive/refs/heads/%s.tar.gz", FLUX_RECIPES_REPO_URL, FLUX_RECIPES_BRANCH);
+            if (flux_download(archive_url, tmp_tar) != FLUX_ERR_NONE) {
+                flux_err("failed to download recipe repo");
+                return FLUX_ERR_NETWORK;
+            }
+
+            char cmd[FLUX_MAX_PATH_LEN * 2 + FLUX_MAX_URL_LEN + 64];
+            snprintf(cmd, sizeof(cmd),
+                    "mkdir -p \"%s\" && tar -xf \"%s\" -C \"%s\" --strip-components=1",
+                    config->local_repo_path, tmp_tar, config->local_repo_path);
+            if (system(cmd) != 0) {
+                flux_err("failed to extract recipe repo");
+                remove(tmp_tar);
+                return FLUX_ERR_GENERAL;
+            }
+
+            remove(tmp_tar);
+        }
+    } else {
+        *have_old_head_out = (get_git_head(config->local_repo_path, old_head_out, old_head_len) == FLUX_ERR_NONE);
+
+        flux_step("syncing recipe repo...");
+
+        char cmd[FLUX_MAX_PATH_LEN + 32];
+        snprintf(cmd, sizeof(cmd), "git -C \"%s\" pull", config->local_repo_path);
+
+        if (system(cmd) != 0) {
+            flux_err("failed to sync recipe repo");
+            return FLUX_ERR_NETWORK;
+        }
+    }
+    flux_ok("recipe repo up to date");
+    return FLUX_ERR_NONE;
+}
+
+int flux_collect_package_updates(flux_config_t *config, char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    *count = 0;
+
+    char old_head[64] = {0};
+    int have_old_head = 0;
+    if (flux_sync_recipe_repo(config, old_head, sizeof(old_head), &have_old_head) != FLUX_ERR_NONE)
+        return FLUX_ERR_NETWORK;
+
+    if (have_old_head) {
+        char new_head[64] = {0};
+        if (get_git_head(config->local_repo_path, new_head, sizeof(new_head)) == FLUX_ERR_NONE &&
+            strcmp(old_head, new_head) != 0) {
+            report_and_collect_kotodama_updates(config, old_head, new_head, outdated, max, count);
+        }
+    }
+
+    char arch[ALPINE_MAX_ARCH_LEN];
+    alpine_repos_t alpine_repos;
+    int have_alpine_repos = 0;
+    if (alpine_arch_from_target(config->package_target, arch, sizeof(arch)) == FLUX_ERR_NONE) {
+        flux_step("syncing Alpine package index...");
+        if (alpine_repos_sync(config, arch, &alpine_repos) == FLUX_ERR_NONE) {
+            have_alpine_repos = 1;
+            flux_ok("Alpine package index up to date");
+            collect_alpine_updates(&alpine_repos, outdated, max, count);
+        } else {
+            flux_warn("failed to sync Alpine package index");
+        }
+    }
+
+    flux_step("checking rolling git sources...");
+    collect_floating_git_updates(config, outdated, max, count);
+
+    if (have_alpine_repos) alpine_repos_free(&alpine_repos);
+    return FLUX_ERR_NONE;
+}
