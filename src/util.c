@@ -154,6 +154,105 @@ int flux_protect_conffiles(const char *pkg, const char *destdir, const char **pa
     return FLUX_ERR_NONE;
 }
 
+// reads pkg's own recorded `files` list into *paths (heap, caller frees), returns the count
+static int read_installed_files(const char *pkg, char (**paths)[FLUX_MAX_PATH_LEN]) {
+    char files_path[FLUX_MAX_PATH_LEN + 8];
+    snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", pkg);
+    FILE *f = fopen(files_path, "r");
+    if (!f) { *paths = NULL; return 0; }
+
+    *paths = malloc((size_t)FLUX_MAX_INSTALLED_FILES * FLUX_MAX_PATH_LEN);
+    if (!*paths) { fclose(f); return 0; }
+
+    int count = 0;
+    char line[FLUX_MAX_PATH_LEN];
+    while (count < FLUX_MAX_INSTALLED_FILES && fgets(line, sizeof(line), f)) {
+        strip_newline(line);
+        if (line[0] == '\0') continue;
+        strncpy((*paths)[count], line, FLUX_MAX_PATH_LEN - 1);
+        count++;
+    }
+    fclose(f);
+    return count;
+}
+
+int flux_backfill_checksums(int *backfilled_count) {
+    *backfilled_count = 0;
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n);
+
+    for (int i = 0; i < n; i++) {
+        char (*paths)[FLUX_MAX_PATH_LEN] = NULL;
+        int path_count = read_installed_files(names[i], &paths);
+        if (path_count == 0) { free(paths); continue; } // meta-package, or files list missing entirely
+
+        char sums_path[FLUX_MAX_PATH_LEN + 16];
+        snprintf(sums_path, sizeof(sums_path), "/var/lib/flux/installed/%s/checksums", names[i]);
+
+        int sum_lines = 0;
+        FILE *sf = fopen(sums_path, "r");
+        if (sf) {
+            char sline[80];
+            while (fgets(sline, sizeof(sline), sf)) sum_lines++;
+            fclose(sf);
+        }
+        if (sum_lines >= path_count) { free(paths); continue; } // already fully covered
+
+        FILE *out = fopen(sums_path, "w");
+        if (out) {
+            for (int j = 0; j < path_count; j++) {
+                char hash[72];
+                sha256_of_file(paths[j], hash, sizeof(hash));
+                fprintf(out, "%s\n", hash);
+            }
+            fclose(out);
+            (*backfilled_count)++;
+        }
+        free(paths);
+    }
+    return FLUX_ERR_NONE;
+}
+
+int flux_diff_modified_files(flux_modified_file_t *out, int max, int *count) {
+    *count = 0;
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n);
+
+    for (int i = 0; i < n && *count < max; i++) {
+        char files_path[FLUX_MAX_PATH_LEN + 8], sums_path[FLUX_MAX_PATH_LEN + 16];
+        snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", names[i]);
+        snprintf(sums_path, sizeof(sums_path), "/var/lib/flux/installed/%s/checksums", names[i]);
+
+        FILE *ff = fopen(files_path, "r");
+        FILE *sf = fopen(sums_path, "r");
+        if (!ff || !sf) { // no baseline recorded yet - nothing to compare against
+            if (ff) fclose(ff);
+            if (sf) fclose(sf);
+            continue;
+        }
+
+        char fline[FLUX_MAX_PATH_LEN], sline[80];
+        while (*count < max && fgets(fline, sizeof(fline), ff) && fgets(sline, sizeof(sline), sf)) {
+            strip_newline(fline);
+            strip_newline(sline);
+            if (fline[0] == '\0') continue;
+
+            char live_hash[72];
+            sha256_of_file(fline, live_hash, sizeof(live_hash));
+            if (live_hash[0] == '\0' || strcmp(live_hash, sline) == 0) continue; // gone, or untouched
+
+            strncpy(out[*count].pkg, names[i], FLUX_MAX_NAME_LEN - 1);
+            strncpy(out[*count].path, fline, FLUX_MAX_PATH_LEN - 1);
+            (*count)++;
+        }
+        fclose(ff);
+        fclose(sf);
+    }
+    return FLUX_ERR_NONE;
+}
+
 int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_count) {
     char dir[FLUX_MAX_PATH_LEN];
     snprintf(dir, sizeof(dir), "/var/lib/flux/installed/%s", info->name);

@@ -23,6 +23,24 @@ void flux_split_git_source(const char *url, char *out_url, size_t out_url_len,
 int flux_resolve_git_remote_head(const char *url, const char *ref, char *out, size_t outlen);
 int flux_autoremove_orphans(int *removed_count, int dry_run);
 
+// computes and writes checksums for any installed package that doesn't have a full set yet -
+// every package predating flux_protect_conffiles has no baseline at all, so none of them are
+// protected on their *next* upgrade either, until this has run once. Safe to run repeatedly -
+// a package with a full, already-matching checksums file is left untouched.
+int flux_backfill_checksums(int *backfilled_count);
+
+typedef struct {
+    char pkg[FLUX_MAX_NAME_LEN];
+    char path[FLUX_MAX_PATH_LEN];
+} flux_modified_file_t;
+
+// every installed file whose live content no longer matches what its own package shipped -
+// a system-wide "what have I changed" report, using the exact same checksums
+// flux_protect_conffiles already relies on. A package with no recorded checksums yet (still
+// pending a flux_backfill_checksums run, or an upgrade that writes fresh ones) has nothing to
+// compare against and is silently skipped, same as flux_protect_conffiles does on an upgrade.
+int flux_diff_modified_files(flux_modified_file_t *out, int max, int *count);
+
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
 int flux_is_kira_pkg(const char *name);
 
