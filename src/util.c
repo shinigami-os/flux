@@ -88,6 +88,72 @@ int flux_load_config(flux_config_t *config) {
 }
 
 
+// empty out on any failure (missing file, command failure) rather than a partial/stale read
+static void sha256_of_file(const char *path, char *out, size_t outlen) {
+    out[0] = '\0';
+    char cmd[FLUX_MAX_PATH_LEN + 32];
+    snprintf(cmd, sizeof(cmd), "sha256sum -- \"%s\" 2>/dev/null", path);
+    FILE *p = popen(cmd, "r");
+    if (!p) return;
+    char line[128] = {0};
+    if (fgets(line, sizeof(line), p)) {
+        char *sp = strchr(line, ' ');
+        if (sp) *sp = '\0';
+        strncpy(out, line, outlen - 1);
+    }
+    pclose(p);
+}
+
+int flux_protect_conffiles(const char *pkg, const char *destdir, const char **paths, int path_count,
+                            char protected_out[][FLUX_MAX_PATH_LEN], int max_protected, int *protected_count) {
+    *protected_count = 0;
+    if (!flux_db_is_installed(pkg)) return FLUX_ERR_NONE; // fresh install: nothing was ever shipped to protect
+
+    char old_files_path[FLUX_MAX_PATH_LEN + 8], old_sums_path[FLUX_MAX_PATH_LEN + 16];
+    snprintf(old_files_path, sizeof(old_files_path), "/var/lib/flux/installed/%s/files", pkg);
+    snprintf(old_sums_path, sizeof(old_sums_path), "/var/lib/flux/installed/%s/checksums", pkg);
+
+    FILE *ff = fopen(old_files_path, "r");
+    FILE *sf = fopen(old_sums_path, "r");
+    if (!ff || !sf) { // no recorded checksums (package predates this feature) - nothing to compare against
+        if (ff) fclose(ff);
+        if (sf) fclose(sf);
+        return FLUX_ERR_NONE;
+    }
+
+    char fline[FLUX_MAX_PATH_LEN], sline[80];
+    while (fgets(fline, sizeof(fline), ff) && fgets(sline, sizeof(sline), sf)) {
+        strip_newline(fline);
+        strip_newline(sline);
+        if (fline[0] == '\0') continue;
+
+        int idx = -1;
+        for (int i = 0; i < path_count; i++)
+            if (strcmp(paths[i], fline) == 0) { idx = i; break; }
+        if (idx < 0) continue; // not part of this install (file dropped in the new version, etc.)
+
+        char live_hash[72];
+        sha256_of_file(fline, live_hash, sizeof(live_hash));
+        if (live_hash[0] == '\0' || strcmp(live_hash, sline) == 0) continue; // gone, or untouched since we shipped it
+
+        char staged_path[FLUX_MAX_PATH_LEN * 2];
+        snprintf(staged_path, sizeof(staged_path), "%s%s", destdir, fline);
+        char staged_hash[72];
+        sha256_of_file(staged_path, staged_hash, sizeof(staged_hash));
+        if (staged_hash[0] == '\0' || strcmp(staged_hash, live_hash) == 0) continue; // already matches, nothing to do
+
+        char new_path[FLUX_MAX_PATH_LEN * 2 + 8];
+        snprintf(new_path, sizeof(new_path), "%s.apk-new", staged_path);
+        if (rename(staged_path, new_path) == 0 && *protected_count < max_protected) {
+            strncpy(protected_out[*protected_count], fline, FLUX_MAX_PATH_LEN - 1);
+            (*protected_count)++;
+        }
+    }
+    fclose(ff);
+    fclose(sf);
+    return FLUX_ERR_NONE;
+}
+
 int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_count) {
     char dir[FLUX_MAX_PATH_LEN];
     snprintf(dir, sizeof(dir), "/var/lib/flux/installed/%s", info->name);
@@ -118,6 +184,21 @@ int flux_db_register(const flux_pkg_info_t *info, const char **files, int file_c
     if (!f) return FLUX_ERR_GENERAL;
     for (int i = 0; i < file_count; i++)
         fprintf(f, "%s\n", files[i]);
+    fclose(f);
+
+    // one sha256 per line, same order as files above - read from the real path, which by now
+    // (every caller registers after its own copy-to-root) holds exactly what got installed.
+    // compared against on the next upgrade to tell a local edit apart from an untouched file -
+    // see flux_protect_conffiles
+    char sums_path[FLUX_MAX_PATH_LEN + 16];
+    snprintf(sums_path, sizeof(sums_path), "%s/checksums", dir);
+    f = fopen(sums_path, "w");
+    if (!f) return FLUX_ERR_GENERAL;
+    for (int i = 0; i < file_count; i++) {
+        char hash[72];
+        sha256_of_file(files[i], hash, sizeof(hash));
+        fprintf(f, "%s\n", hash);
+    }
     fclose(f);
 
     return FLUX_ERR_NONE;

@@ -27,6 +27,15 @@ int flux_autoremove_orphans(int *removed_count, int dry_run);
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
 int flux_is_kira_pkg(const char *name);
 
+// matches apk's own conffile handling: on an upgrade (pkg already installed), any file whose
+// live content no longer matches what pkg itself originally shipped was modified locally since
+// install - rather than silently clobbering that edit, the incoming copy is renamed to
+// "<path>.apk-new" inside destdir (so the following copy-to-root installs it there instead) and
+// its original path is recorded into protected_out. A fresh install (pkg not yet installed) or a
+// file nothing has touched since it was shipped is never protected - only genuine local edits are.
+int flux_protect_conffiles(const char *pkg, const char *destdir, const char **paths, int path_count,
+                            char protected_out[][FLUX_MAX_PATH_LEN], int max_protected, int *protected_count);
+
 // true if any of `paths` is already owned by another installed package (pkg's own prior files don't count) with
 // different content than the incoming one - matching apk's own tolerance, two packages legitimately shipping the
 // same byte-identical file isn't a conflict, and neither is pkg overwriting a file owned by one of its own direct

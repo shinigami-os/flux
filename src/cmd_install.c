@@ -619,6 +619,14 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         }
     }
 
+    // a locally-modified conffile is always a handful of files at most, nowhere near
+    // FLUX_MAX_INSTALLED_FILES - that one's heap-allocated elsewhere specifically
+    // because it's too big to ever put on the stack
+    char protected_paths[64][FLUX_MAX_PATH_LEN];
+    int protected_count = 0;
+    flux_protect_conffiles(found.name, destdir, file_ptrs, file_count,
+                            protected_paths, 64, &protected_count);
+
     flux_step("installing to system...");
     if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
         flux_err("failed to copy files to system");
@@ -626,6 +634,9 @@ static int try_alpine_install(const char *pkg, flux_config_t *config) {
         free(file_ptrs);
         return FLUX_ERR_GENERAL;
     }
+
+    for (int i = 0; i < protected_count; i++)
+        flux_warn("%s: kept local changes to %s, new version saved as %s.apk-new", found.name, protected_paths[i], protected_paths[i]);
 
     if (triggers_approved) {
         const int post_indices[2] = { 1, 2 }; // .post-install, .trigger
@@ -796,12 +807,6 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
 
     if (cache_hit) {
-        flux_step("installing to system...");
-        if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
-            flux_err("failed to copy cached files to system");
-            return FLUX_ERR_GENERAL;
-        }
-
         // heap, not stack: at FLUX_MAX_INSTALLED_FILES=32768 this is 8MB, and
         // flux_install recurses for dependencies - stacking that per call
         // is exactly what blew the stack installing elogind+polkit together
@@ -815,6 +820,22 @@ int flux_install(int argc, char **argv, const char *usage) {
         }
         int file_count = 0;
         collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
+
+        char protected_paths[64][FLUX_MAX_PATH_LEN];
+        int protected_count = 0;
+        flux_protect_conffiles(recipe.name, destdir, file_ptrs, file_count,
+                                protected_paths, 64, &protected_count);
+
+        flux_step("installing to system...");
+        if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
+            flux_err("failed to copy cached files to system");
+            free(installed_files);
+            free(file_ptrs);
+            return FLUX_ERR_GENERAL;
+        }
+
+        for (int i = 0; i < protected_count; i++)
+            flux_warn("%s: kept local changes to %s, new version saved as %s.apk-new", recipe.name, protected_paths[i], protected_paths[i]);
 
         flux_pkg_info_t info;
         memset(&info, 0, sizeof(info));
@@ -972,12 +993,6 @@ int flux_install(int argc, char **argv, const char *usage) {
         return FLUX_ERR_BUILD;
     }
 
-    flux_step("installing to system...");
-    if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
-        flux_err("failed to copy files to system");
-        return FLUX_ERR_GENERAL;
-    }
-
     // heap, not stack: at FLUX_MAX_INSTALLED_FILES=32768 this is 8MB, and
     // flux_install recurses for dependencies - stacking that per call is
     // exactly what blew the stack installing elogind+polkit together
@@ -991,6 +1006,22 @@ int flux_install(int argc, char **argv, const char *usage) {
     }
     int file_count = 0;
     collect_files_from_destdir(destdir, installed_files, file_ptrs, &file_count);
+
+    char protected_paths[64][FLUX_MAX_PATH_LEN];
+    int protected_count = 0;
+    flux_protect_conffiles(recipe.name, destdir, file_ptrs, file_count,
+                            protected_paths, 64, &protected_count);
+
+    flux_step("installing to system...");
+    if (copy_destdir_to_root(destdir) != FLUX_ERR_NONE) {
+        flux_err("failed to copy files to system");
+        free(installed_files);
+        free(file_ptrs);
+        return FLUX_ERR_GENERAL;
+    }
+
+    for (int i = 0; i < protected_count; i++)
+        flux_warn("%s: kept local changes to %s, new version saved as %s.apk-new", recipe.name, protected_paths[i], protected_paths[i]);
 
     flux_pkg_info_t info;
     time_t now = time(NULL);
