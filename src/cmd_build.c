@@ -7,6 +7,7 @@
 #include "../include/flux.h"
 #include "../include/util.h"
 #include "../include/parser.h"
+#include "../include/sha256.h"
 
 int flux_build(int argc, char **argv, const char *usage) {
     if (argc < 1) {
@@ -152,16 +153,9 @@ int flux_build(int argc, char **argv, const char *usage) {
         }
 
         flux_step("verifying checksum...");
-        char sha_cmd[640];
-        snprintf(sha_cmd, sizeof(sha_cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", tarball);
-        system(sha_cmd);
-        FILE *f = fopen("/tmp/flux_hash_actual", "r");
-        if (!f) return FLUX_ERR_GENERAL;
-        char actual[65] = {0};
-        fread(actual, 1, 64, f);
-        fclose(f);
-        remove("/tmp/flux_hash_actual");
-        if (strcmp(actual, recipe.sha256) != 0) {
+        char actual[65];
+        flux_sha256_file(tarball, actual, sizeof(actual));
+        if (actual[0] == '\0' || strcmp(actual, recipe.sha256) != 0) {
             flux_err("checksum mismatch (expected %s, got %s)", recipe.sha256, actual);
             return FLUX_ERR_GENERAL;
         }

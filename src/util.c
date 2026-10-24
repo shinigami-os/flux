@@ -6,6 +6,7 @@
 #include "../include/util.h"
 #include "../include/parser.h"
 #include "../include/alpine.h"
+#include "../include/sha256.h"
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -89,19 +90,11 @@ int flux_load_config(flux_config_t *config) {
 
 
 // empty out on any failure (missing file, command failure) rather than a partial/stale read
+// in-process (see sha256.c) - this used to shell out to sha256sum per file, which barely
+// mattered for one package's own install but made flux_checksum_backfill and flux_diff
+// (every file of every installed package) take minutes on a real system
 static void sha256_of_file(const char *path, char *out, size_t outlen) {
-    out[0] = '\0';
-    char cmd[FLUX_MAX_PATH_LEN + 32];
-    snprintf(cmd, sizeof(cmd), "sha256sum -- \"%s\" 2>/dev/null", path);
-    FILE *p = popen(cmd, "r");
-    if (!p) return;
-    char line[128] = {0};
-    if (fgets(line, sizeof(line), p)) {
-        char *sp = strchr(line, ' ');
-        if (sp) *sp = '\0';
-        strncpy(out, line, outlen - 1);
-    }
-    pclose(p);
+    flux_sha256_file(path, out, outlen);
 }
 
 int flux_protect_conffiles(const char *pkg, const char *destdir, const char **paths, int path_count,
@@ -428,21 +421,12 @@ int flux_cache_key(const char *name, const char *version, const char *cflags, co
         snprintf(input, sizeof(input), "%s|%s", cflags, target);
     else
         snprintf(input, sizeof(input), "%s", cflags);
-    char cmd[sizeof(input) + 64];
-    snprintf(cmd, sizeof(cmd), "echo -n \"%s\" | sha256sum | cut -c1-6", input);
+    char full_hash[65];
+    flux_sha256_string(input, full_hash, sizeof(full_hash));
+    if (full_hash[0] == '\0') return FLUX_ERR_GENERAL;
 
-    FILE *f = popen(cmd, "r");
-    if (!f) return FLUX_ERR_GENERAL;
-
-    char hash[16] = {0};
-    if (fgets(hash, sizeof(hash), f) == NULL) {
-        pclose(f);
-        return FLUX_ERR_GENERAL;
-    }
-    pclose(f);
-
-    strip_newline(hash);
-    trim_right(hash);
+    char hash[8];
+    snprintf(hash, sizeof(hash), "%.6s", full_hash);
 
     snprintf(out, outlen, "%s_%s-%s", name, version, hash);
     return FLUX_ERR_NONE;
@@ -731,7 +715,7 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
 // verifies every Alpine package signature and minisign every kira-* one.
 static int flux_pkg_is_protected(const char *name) {
     static const char *protected_pkgs[] = {
-        "curl", "openssl", "minisign", "tar", "git", "sha256sum", NULL
+        "curl", "openssl", "minisign", "tar", "git", NULL
     };
     for (int i = 0; protected_pkgs[i]; i++)
         if (strcmp(name, protected_pkgs[i]) == 0) return 1;

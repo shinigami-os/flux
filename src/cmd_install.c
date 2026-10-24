@@ -10,6 +10,7 @@
 #include "../include/util.h"
 #include "../include/parser.h"
 #include "../include/alpine.h"
+#include "../include/sha256.h"
 
 static int g_auto_installed = 0;
 static int g_yes = 0;
@@ -113,19 +114,10 @@ static int verify_sha256(const char *path, const char *expected) {
         return 0;
     }
 
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "sha256sum \"%s\" | cut -d' ' -f1 | tr -d '\\n' > /tmp/flux_hash_actual", path);
-    system(cmd);
+    char actual[65];
+    flux_sha256_file(path, actual, sizeof(actual));
 
-    FILE *f = fopen("/tmp/flux_hash_actual", "r");
-    if (!f) return 1;
-
-    char actual[65] = {0};
-    fread(actual, 1, 64, f);
-    fclose(f);
-    remove("/tmp/flux_hash_actual");
-
-    if (strcmp(actual, expected) != 0) {
+    if (actual[0] == '\0' || strcmp(actual, expected) != 0) {
         flux_err("checksum mismatch (expected %s, got %s)", expected, actual);
         return 1;
     }
