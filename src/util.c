@@ -558,6 +558,15 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
             if (strcmp(names[i], direct_deps[d]) == 0) { is_direct_dep = 1; break; }
         if (is_direct_dep) continue; // pkg's own file legitimately supersedes its dependency's copy
 
+        // a kotodama package only ever exists to replace something Alpine also ships (e.g.
+        // kira-elogind standing in for elogind/libelogind) - this check only ever runs for an
+        // incoming Alpine package (the only caller is try_alpine_install), so if the file is
+        // already owned by an installed kotodama package, that from-source build is the one
+        // Kira actually chose to ship and always wins, same as the byte-identical case below
+        flux_pkg_info_t owner_info;
+        if (flux_db_read_info(names[i], &owner_info) == FLUX_ERR_NONE &&
+            strcmp(owner_info.source, "kotodama") == 0) continue;
+
         char files_path[FLUX_MAX_PATH_LEN + 8];
         snprintf(files_path, sizeof(files_path), "/var/lib/flux/installed/%s/files", names[i]);
         FILE *f = fopen(files_path, "r");
