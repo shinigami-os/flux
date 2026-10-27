@@ -23,6 +23,30 @@ void flux_split_git_source(const char *url, char *out_url, size_t out_url_len,
 int flux_resolve_git_remote_head(const char *url, const char *ref, char *out, size_t outlen);
 int flux_autoremove_orphans(int *removed_count, int dry_run);
 
+// the parsed form of one package's own declared runtime deps - either a kotodama recipe's rdeps,
+// or an Alpine package's tokenized D: line. Building this is the expensive part (a disk read and
+// a full parse_kotodama for a kira-* package, a tokenize pass for an Alpine one) - caching it once
+// per package per pass instead of once per *comparison* is what turns autoremove's (and flux why's)
+// old O(n^2) pile of re-parses into O(n)
+typedef struct {
+    int valid;    // false if the recipe/package lookup itself failed - treated as "declares nothing"
+    int is_kira;
+    char rdeps[FLUX_MAX_RDEPS][FLUX_MAX_NAME_LEN];
+    alpine_dep_t tokens[ALPINE_MAX_TOKENS_PER_LINE];
+    int token_count;
+} pkg_dep_cache_t;
+
+// only checks runtime deps, not build deps - see the matching comment on flux_autoremove_orphans'
+// own use of this. pkg_name can be either a kira-* package (checked against its local kotodama
+// runtime= list) or a plain Alpine-resolved package (checked against the real D: line from the
+// cached Alpine index)
+void build_dep_cache(const char *pkg_name, const flux_config_t *config, const alpine_repos_t *repos,
+                      pkg_dep_cache_t *out);
+
+// same matching rules build_dep_cache's callers rely on, just reading from an already-built
+// cache instead of re-parsing/re-tokenizing pkg_cache's own source on every call
+int cached_depends_on(const pkg_dep_cache_t *pkg_cache, const char *dep_name, const alpine_repos_t *repos);
+
 // computes and writes checksums for any installed package that doesn't have a full set yet -
 // every package predating flux_protect_conffiles has no baseline at all, so none of them are
 // protected on their *next* upgrade either, until this has run once. Safe to run repeatedly -

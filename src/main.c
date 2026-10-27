@@ -16,6 +16,7 @@ int flux_cache(int argc, char **argv, const char *usage);
 int flux_autoremove(int argc, char **argv, const char *usage);
 int flux_version(int argc, char **argv, const char *usage);
 int flux_sys(int argc, char **argv, const char *usage);
+int flux_why(int argc, char **argv, const char *usage);
 int flux_checksum_backfill(int argc, char **argv, const char *usage);
 
 flux_cmd_t commands[] = {
@@ -24,6 +25,7 @@ flux_cmd_t commands[] = {
     {"build", flux_build, "Cross-compile a kotodama recipe into the bootstrap sysroot", "flux build --cross <pkg>"},
     {"remove", flux_remove, "Remove a package, optionally its orphaned deps", "flux remove [-a] <pkg>"},
     {"autoremove", flux_autoremove, "Remove all orphaned auto-installed dependencies", "flux autoremove [-n|--dry-run]"},
+    {"why", flux_why, "Trace the dependency chain(s) keeping a package installed", "flux why <pkg>"},
     {"check", flux_check, "Check for package updates (read-only; add --files to also check for local modifications)", "flux check [--files]"},
     {"upgrade", flux_upgrade, "Install whatever 'flux check' found", "flux upgrade"},
     {"checksum-backfill", flux_checksum_backfill, "Record checksums for installed packages that predate conffile protection", "flux checksum-backfill"},

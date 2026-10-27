@@ -727,13 +727,8 @@ static int flux_pkg_is_protected(const char *name) {
 // a full parse_kotodama for a kira-* package, a tokenize pass for an Alpine one) - caching it once
 // per package per pass instead of once per *comparison* is what turns autoremove's old O(n^2) pile
 // of re-parses (with real installed counts in the hundreds, compounded by up to 50 passes) into O(n)
-typedef struct {
-    int valid;    // false if the recipe/package lookup itself failed - treated as "declares nothing"
-    int is_kira;
-    char rdeps[FLUX_MAX_RDEPS][FLUX_MAX_NAME_LEN];
-    alpine_dep_t tokens[ALPINE_MAX_TOKENS_PER_LINE];
-    int token_count;
-} pkg_dep_cache_t;
+// (pkg_dep_cache_t itself, and its own doc comment, now live in util.h - flux_why reuses
+// both this and cached_depends_on below instead of re-implementing the same matching rules)
 
 // Only checks runtime deps, not build deps - a package's build deps are a
 // one-time need already satisfied by the time it's sitting installed, not
@@ -750,8 +745,8 @@ typedef struct {
 // treating "no kotodama file" as "no dependencies") is what caused
 // autoremove to remove real runtime dependencies of ordinary Alpine
 // packages: nothing being a local recipe was reporting them as needed.
-static void build_dep_cache(const char *pkg_name, const flux_config_t *config, const alpine_repos_t *repos,
-                             pkg_dep_cache_t *out) {
+void build_dep_cache(const char *pkg_name, const flux_config_t *config, const alpine_repos_t *repos,
+                      pkg_dep_cache_t *out) {
     memset(out, 0, sizeof(*out));
     if (flux_is_kira_pkg(pkg_name)) {
         out->is_kira = 1;
@@ -772,7 +767,7 @@ static void build_dep_cache(const char *pkg_name, const flux_config_t *config, c
 
 // same matching rules as the old per-pair flux_pkg_runtime_depends_on, just reading from an
 // already-built cache instead of re-parsing/re-tokenizing pkg_cache's own source on every call
-static int cached_depends_on(const pkg_dep_cache_t *pkg_cache, const char *dep_name, const alpine_repos_t *repos) {
+int cached_depends_on(const pkg_dep_cache_t *pkg_cache, const char *dep_name, const alpine_repos_t *repos) {
     if (!pkg_cache->valid) return 0;
     if (pkg_cache->is_kira) {
         for (int i = 0; i < FLUX_MAX_RDEPS; i++)
