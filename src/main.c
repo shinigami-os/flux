@@ -33,7 +33,7 @@ flux_cmd_t commands[] = {
     {"list", flux_list, "List installed packages", "flux list [-a]"},
     {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
     {"version", flux_version, "Show the installed flux version", "flux version"},
-    {"sys", flux_sys, "Check or upgrade flux itself, kira-base, and the kernel", "flux sys check | flux sys upgrade [flux|base|kernel]"},
+    {"sys", flux_sys, "Check/upgrade flux itself, kira-base, the kernel - or clean up old kernels", "flux sys check | flux sys upgrade [flux|base|kernel] | flux sys clean kernel [--keep N]"},
     {NULL, NULL, NULL, NULL}
 };
 

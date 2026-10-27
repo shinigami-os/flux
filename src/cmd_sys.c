@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <time.h>
 #include "../include/flux.h"
 #include "../include/util.h"
 #include "../include/alpine.h"
@@ -124,6 +126,128 @@ static int sys_upgrade(int argc, char **argv) {
     return FLUX_ERR_USAGE;
 }
 
+typedef struct {
+    char name[128];
+    time_t mtime;
+} kernel_version_t;
+
+#define FLUX_KERNEL_CLEAN_MAX_VERSIONS 64
+#define FLUX_KERNEL_CLEAN_DEFAULT_KEEP 2
+
+// a kernel-update never removes the kernel it's replacing (kept on purpose, for rollback -
+// see flux_kernel_update's own comment on old_modules_path), so without this every update
+// just adds another ~90-190MB under /lib/modules + /boot forever. Never a candidate: the
+// currently *running* kernel (uname -r), regardless of how old or how it sorts by mtime
+static int sys_clean_kernel(int argc, char **argv) {
+    static const char *clean_usage = "flux sys clean kernel [--keep N] [-y]";
+    int keep = FLUX_KERNEL_CLEAN_DEFAULT_KEEP;
+    int yes = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0) {
+            yes = 1;
+        } else if (strcmp(argv[i], "--keep") == 0 && i + 1 < argc) {
+            keep = atoi(argv[i + 1]);
+            i++;
+        } else {
+            flux_usage_error(clean_usage);
+            return FLUX_ERR_USAGE;
+        }
+    }
+    if (keep < 1) {
+        flux_err("--keep must be at least 1 - the running kernel is never removed regardless");
+        return FLUX_ERR_USAGE;
+    }
+
+    FILE *f = popen("uname -r", "r");
+    if (!f) { flux_err("failed to read current kernel version"); return FLUX_ERR_GENERAL; }
+    char current[128] = {0};
+    fgets(current, sizeof(current), f);
+    pclose(f);
+    strip_newline(current);
+    if (strlen(current) == 0) { flux_err("failed to read current kernel version"); return FLUX_ERR_GENERAL; }
+
+    DIR *d = opendir("/lib/modules");
+    if (!d) { flux_err("/lib/modules not found"); return FLUX_ERR_GENERAL; }
+
+    kernel_version_t versions[FLUX_KERNEL_CLEAN_MAX_VERSIONS];
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL && count < FLUX_KERNEL_CLEAN_MAX_VERSIONS) {
+        if (entry->d_name[0] == '.') continue;
+        if (strcmp(entry->d_name, current) == 0) continue;
+
+        char path[256];
+        snprintf(path, sizeof(path), "/lib/modules/%s", entry->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        strncpy(versions[count].name, entry->d_name, sizeof(versions[count].name) - 1);
+        versions[count].mtime = st.st_mtime;
+        count++;
+    }
+    closedir(d);
+
+    // newest (by mtime) first
+    for (int i = 0; i < count - 1; i++)
+        for (int j = i + 1; j < count; j++)
+            if (versions[j].mtime > versions[i].mtime) {
+                kernel_version_t tmp = versions[i];
+                versions[i] = versions[j];
+                versions[j] = tmp;
+            }
+
+    // keep already counts the running kernel itself, which was never in this list to begin with
+    int keep_old = keep - 1;
+    if (keep_old < 0) keep_old = 0;
+    int remove_count = count - keep_old;
+    if (remove_count <= 0) {
+        flux_ok("nothing to clean - %d old kernel%s already within the keep-%d limit", count, count == 1 ? "" : "s", keep);
+        return FLUX_ERR_NONE;
+    }
+
+    flux_action("The following old kernels will be removed (keeping %s, the running one, plus %d more recent):", current, keep_old);
+    for (int i = keep_old; i < count; i++)
+        printf("  - %s\n", versions[i].name);
+
+    if (!yes) {
+        printf("Proceed? [y/N] ");
+        char answer[8];
+        if (!fgets(answer, sizeof(answer), stdin) || (answer[0] != 'y' && answer[0] != 'Y')) {
+            flux_warn("aborted");
+            return FLUX_ERR_NONE;
+        }
+    }
+
+    int removed = 0;
+    for (int i = keep_old; i < count; i++) {
+        char modpath[256], vmlinuz[256], initrd[256], cmd[896];
+        snprintf(modpath, sizeof(modpath), "/lib/modules/%s", versions[i].name);
+        snprintf(vmlinuz, sizeof(vmlinuz), "/boot/vmlinuz-%s", versions[i].name);
+        snprintf(initrd, sizeof(initrd), "/boot/initrd.img-%s", versions[i].name);
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"; rm -f \"%s\" \"%s\"", modpath, vmlinuz, initrd);
+
+        if (system(cmd) == 0) {
+            flux_step("removed %s", versions[i].name);
+            removed++;
+        } else {
+            flux_warn("failed to fully remove %s (need root?)", versions[i].name);
+        }
+    }
+
+    if (removed > 0) {
+        if (system("command -v grub-mkconfig >/dev/null 2>&1") == 0) {
+            flux_step("updating grub...");
+            system("grub-mkconfig -o /boot/grub/grub.cfg");
+        } else if (system("command -v update-grub >/dev/null 2>&1") == 0) {
+            flux_step("updating grub...");
+            system("update-grub");
+        }
+    }
+
+    flux_ok("removed %d old kernel%s", removed, removed == 1 ? "" : "s");
+    return FLUX_ERR_NONE;
+}
+
 int flux_sys(int argc, char **argv, const char *usage) {
     if (argc < 1) {
         flux_usage_error(usage);
@@ -140,6 +264,14 @@ int flux_sys(int argc, char **argv, const char *usage) {
 
     if (strcmp(argv[0], "upgrade") == 0)
         return sys_upgrade(argc - 1, argv + 1);
+
+    if (strcmp(argv[0], "clean") == 0) {
+        if (argc < 2 || strcmp(argv[1], "kernel") != 0) {
+            flux_usage_error("flux sys clean kernel [--keep N] [-y]");
+            return FLUX_ERR_USAGE;
+        }
+        return sys_clean_kernel(argc - 2, argv + 2);
+    }
 
     flux_usage_error(usage);
     return FLUX_ERR_USAGE;
