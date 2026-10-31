@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.10-11"
+#define FLUX_VERSION "26.10-12"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
 // matches flux-recipes' actual GitHub default branch - only needed for the no-git tarball fallback below, git clone/pull just follow the default on their own
@@ -76,6 +76,10 @@ typedef struct {
     char version[FLUX_MAX_VERSION_LEN];
     char description[FLUX_MAX_DESC_LEN];
     char license[FLUX_MAX_LICENSE_LEN];
+    // optional - e.g. kira-devkit-* recipes set this (languages/databases/containers/...) so
+    // kira-installer can group its devkit picker without hardcoding the category list itself.
+    // empty for every recipe that doesn't need one; never required
+    char category[32];
     int size;
     // zero-default means "stage into the cross sysroot", matching pre-existing recipes
     int no_sysroot_stage;

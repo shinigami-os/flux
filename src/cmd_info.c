@@ -41,6 +41,8 @@ int flux_info(int argc, char **argv, const char *usage) {
     printf("  %-16s %s\n",   "version:",     has_recipe ? recipe.version : (have_db_info ? db_info.version : "unknown"));
     printf("  %-16s %s\n",   "description:", has_recipe ? recipe.description : "unknown");
     printf("  %-16s %s\n",   "license:",     has_recipe ? recipe.license     : "unknown");
+    if (has_recipe && recipe.category[0] != '\0')
+        printf("  %-16s %s\n", "category:", recipe.category);
     printf("  %-16s %dMB\n", "size:",        has_recipe ? recipe.size        : 0);
     if (c) printf("  %-16s \033[%sm%s\033[0m\n", "status:", installed ? "32" : "33", installed ? "installed" : "not installed");
     else printf("  %-16s %s\n", "status:", installed ? "installed" : "not installed");
