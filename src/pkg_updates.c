@@ -51,7 +51,7 @@ static int report_and_collect_kotodama_updates(const flux_config_t *config, cons
         memset(&recipe, 0, sizeof(recipe));
         if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) continue;
 
-        if (strcmp(info.version, recipe.version) == 0) continue;
+        if (recipe.version[0] == '\0' || strcmp(info.version, recipe.version) == 0) continue;
 
         strncpy(rows[*count].col1, pkg, FLUX_MAX_NAME_LEN - 1);
         snprintf(rows[*count].col2, sizeof(rows[*count].col2), "%s -> %s", info.version, recipe.version);

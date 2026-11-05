@@ -164,7 +164,7 @@ static int run_hook(const char *hook, const char *build_dir, const char *destdir
 static int is_installed_and_current(const char *pkg, const flux_recipe_t *recipe) {
     flux_pkg_info_t info;
     if (flux_db_read_info(pkg, &info) != FLUX_ERR_NONE) return 0;
-    if (strcmp(info.version, recipe->version) != 0) return 0;
+    if (recipe->version[0] != '\0' && strcmp(info.version, recipe->version) != 0) return 0;
 
     // a floating source (git+URL#branch with no sha256 pin) never gets a version bump
     // just because upstream moved - it's meant to always track that branch's latest
@@ -746,10 +746,11 @@ int flux_install(int argc, char **argv, const char *usage) {
     int is_floating_git = (has_source && strncmp(recipe.url, "git+", 4) == 0 && strlen(recipe.sha256) == 0);
 
     const char *source_tag = pure_meta ? "meta-package" : "building from source, kotodama";
+    const char *shown_version = recipe.version[0] != '\0' ? recipe.version : "latest";
     if (!g_auto_installed)
-        flux_action("Installing %s %s (%s)", recipe.name, recipe.version, source_tag);
+        flux_action("Installing %s %s (%s)", recipe.name, shown_version, source_tag);
     else
-        flux_step("installing dependency: %s %s (%s)", recipe.name, recipe.version, source_tag);
+        flux_step("installing dependency: %s %s (%s)", recipe.name, shown_version, source_tag);
 
     char recipe_dir[FLUX_MAX_PATH_LEN * 2 + 16];
     snprintf(recipe_dir, sizeof(recipe_dir), "%s/%s", config.local_repo_path, pkg);
@@ -921,6 +922,10 @@ int flux_install(int argc, char **argv, const char *usage) {
             fclose(hf);
         }
         remove("/tmp/flux_hash_actual");
+
+        // a rolling recipe leaves version empty - the commit it built is its version
+        if (recipe.version[0] == '\0' && git_resolved_commit[0] != '\0')
+            snprintf(recipe.version, sizeof(recipe.version), "%.7s", git_resolved_commit);
 
         if (strlen(recipe.sha256) > 0 && strcmp(git_resolved_commit, recipe.sha256) != 0) {
             flux_err("commit mismatch (expected %s, got %s)", recipe.sha256, git_resolved_commit);

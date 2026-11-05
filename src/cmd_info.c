@@ -38,7 +38,7 @@ int flux_info(int argc, char **argv, const char *usage) {
     if (c) printf("\033[1;35m%s\033[0m\n", has_recipe ? recipe.name : pkg);
     else printf("%s\n", has_recipe ? recipe.name : pkg);
     flux_rule();
-    printf("  %-16s %s\n",   "version:",     has_recipe ? recipe.version : (have_db_info ? db_info.version : "unknown"));
+    printf("  %-16s %s\n",   "version:",     has_recipe && recipe.version[0] != '\0' ? recipe.version : (have_db_info ? db_info.version : (has_recipe ? "latest commit" : "unknown")));
     printf("  %-16s %s\n",   "description:", has_recipe ? recipe.description : "unknown");
     printf("  %-16s %s\n",   "license:",     has_recipe ? recipe.license     : "unknown");
     if (has_recipe && recipe.category[0] != '\0')
