@@ -119,6 +119,7 @@ int flux_protect_conffiles(const char *pkg, const char *destdir, const char **pa
         strip_newline(fline);
         strip_newline(sline);
         if (fline[0] == '\0') continue;
+        if (strncmp(fline, "/etc/", 5) != 0) continue; // only config is the admin's to keep, a stale /usr file just breaks the package
 
         int idx = -1;
         for (int i = 0; i < path_count; i++)

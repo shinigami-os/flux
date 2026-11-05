@@ -68,7 +68,7 @@ int flux_diff_modified_files(flux_modified_file_t *out, int max, int *count);
 // true if name is routed to kotodama (Kira's own software); false routes to Alpine
 int flux_is_kira_pkg(const char *name);
 
-// matches apk's own conffile handling: on an upgrade (pkg already installed), any file whose
+// matches apk's own conffile handling: on an upgrade (pkg already installed), any /etc file whose
 // live content no longer matches what pkg itself originally shipped was modified locally since
 // install - rather than silently clobbering that edit, the incoming copy is renamed to
 // "<path>.apk-new" inside destdir (so the following copy-to-root installs it there instead) and
