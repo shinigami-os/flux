@@ -410,7 +410,7 @@ static int copy_destdir_to_root(const char *destdir) {
 
 static int collect_files_from_destdir(const char *destdir, char files[][FLUX_MAX_PATH_LEN], const char **ptrs, int *count) {
     char find_cmd[512];
-    snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -type f", destdir);
+    snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" \\( -type f -o -type l \\)", destdir);
     FILE *fp = popen(find_cmd, "r");
     if (!fp) return FLUX_ERR_GENERAL;
 
