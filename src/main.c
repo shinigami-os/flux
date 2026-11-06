@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include "../include/flux.h"
 #include "../include/util.h"
 
@@ -37,6 +38,13 @@ flux_cmd_t commands[] = {
     {NULL, NULL, NULL, NULL}
 };
 
+static int needs_root(const char *name) {
+    static const char *const names[] = {"install", "remove", "autoremove", "upgrade", "check", "checksum-backfill", "build", NULL};
+    for (int i = 0; names[i]; i++)
+        if (strcmp(name, names[i]) == 0) return 1;
+    return 0;
+}
+
 void flux_usage() {
     int c = flux_colors_enabled();
     const char *bold = c ? "\033[1m" : "", *reset = c ? "\033[0m" : "";
@@ -72,6 +80,10 @@ int main(int argc, char **argv) {
         command = "version";
     for(int i = 0; commands[i].handler != NULL; i++){
         if(strcmp(command, commands[i].name) == 0){
+            if (needs_root(command) && geteuid() != 0) {
+                flux_err("'flux %s' changes the system and needs root - run: sudo flux %s", command, command);
+                return FLUX_ERR_PERMISSION;
+            }
             return commands[i].handler(argc - 2, argv + 2, commands[i].usage);
         }
     }
