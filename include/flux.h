@@ -2,7 +2,7 @@
 #define FLUX_H
 
 // release-based, matches Kira's own scheme: YY.MM, optionally -N for a hotfix (e.g. 26.06-1)
-#define FLUX_VERSION "26.11"
+#define FLUX_VERSION "26.11-1"
 #define FLUX_REPO_URL "https://github.com/shinigami-os/flux"
 #define FLUX_RECIPES_REPO_URL "https://github.com/shinigami-os/flux-recipes"
 // matches flux-recipes' actual GitHub default branch - only needed for the no-git tarball fallback below, git clone/pull just follow the default on their own
@@ -24,7 +24,7 @@
 
 
 #define FLUX_MAX_DEPS        64
-#define FLUX_MAX_RDEPS       64
+#define FLUX_MAX_RDEPS       128
 #define FLUX_MAX_NAME_LEN    64
 #define FLUX_MAX_HOOK_LEN    4096
 #define FLUX_MAX_VERSION_LEN 32
