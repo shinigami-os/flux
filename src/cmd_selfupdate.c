@@ -82,7 +82,7 @@ int flux_self_update(int argc, char **argv, const char *usage) {
             struct stat hst;
             if (stat("/usr/include/stdio.h", &hst) != 0) {
                 flux_err("/usr/include/stdio.h not found");
-                flux_err("hint: musl dev headers are missing, run 'flux base-update' or reinstall kira-base");
+                flux_err("hint: musl dev headers are missing, run 'flux sys upgrade base' or reinstall kira-base");
             } else {
                 flux_err("gcc cannot compile against /usr/include headers");
                 flux_err("hint: try 'flux install -f gcc' to reinstall the compiler");

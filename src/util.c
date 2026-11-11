@@ -712,7 +712,7 @@ int flux_check_file_conflicts(const char *pkg, const char **paths, int path_coun
 // installed package from apk/kotodama's point of view, since flux invokes
 // them directly rather than linking against them, so the dependency-graph
 // walk above can never protect them on its own. Removing curl broke every
-// future flux update/install outright (no way to fetch anything); openssl
+// future flux check/install outright (no way to fetch anything); openssl
 // verifies every Alpine package signature and minisign every kira-* one.
 static int flux_pkg_is_protected(const char *name) {
     static const char *protected_pkgs[] = {
@@ -793,7 +793,7 @@ int flux_autoremove_orphans(int *removed_count, int dry_run) {
     memset(&config, 0, sizeof(config));
     if (flux_load_config(&config) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
-    // loaded once for the whole walk (no network - whatever `flux update` last cached), since most
+    // loaded once for the whole walk (no network - whatever `flux check` last cached), since most
     // installed packages are plain Alpine ones now checked against their real D: line, not a kotodama file
     char arch[ALPINE_MAX_ARCH_LEN];
     alpine_repos_t repos;

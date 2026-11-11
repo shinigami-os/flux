@@ -86,9 +86,9 @@ typedef struct {
     alpine_index_t community;
 } alpine_repos_t;
 
-// fetches+verifies+caches both indexes from the network - only `flux update` should call this
+// fetches+verifies+caches both indexes from the network - only `flux check` should call this
 int alpine_repos_sync(const flux_config_t *config, const char *arch, alpine_repos_t *repos);
-// loads whatever `flux update` last cached, no network - what `flux install`/`flux search`/etc use, fails with a "run flux update" hint if nothing is cached yet
+// loads whatever `flux check` last cached, no network - what `flux install`/`flux search`/etc use, fails with a "run flux check" hint if nothing is cached yet
 int alpine_repos_load(const flux_config_t *config, const char *arch, alpine_repos_t *repos);
 void alpine_repos_free(alpine_repos_t *repos);
 const alpine_pkg_t *alpine_repos_find_by_name(const alpine_repos_t *repos, const char *name, const char **out_repo);

@@ -24,16 +24,19 @@ flux is a minimal package manager written in C: a single static binary that buil
 | `flux install [--flatpak] <pkg>` | Install a package: a `kira-`-prefixed name is built from a kotodama recipe, anything else is resolved against Alpine's package index. `--flatpak` installs via Flathub instead, skipping both |
 | `flux remove [-a] <pkg>` | Remove a package and all its installed files. `-a`/`--autoremove` also removes now-orphaned auto-installed deps |
 | `flux autoremove` | Remove every installed package that's auto-installed and no longer needed by anything |
-| `flux update [-i]` | Sync the local recipe repo and the Alpine package index, report which installed packages (kotodama or Alpine) have a newer version available, and check for a newer flux or kira-base release. `-i` installs the reported updates. |
+| `flux check [--files]` | Sync the local recipe repo and the Alpine package index, then report which installed packages (kotodama or Alpine) have a newer version available. Read-only. `--files` also lists installed files modified since they were installed |
+| `flux upgrade` | Install whatever `flux check` found, in one batch |
 | `flux search <query>` | Search available recipes by name or description |
 | `flux info <pkg>` | Show package details, dependencies, install status |
 | `flux list [-a]` | List installed packages, sorted alphabetically. `-a`/`--auto` also includes auto-installed deps |
 | `flux build [--cross] <pkg>` | Force local compilation, optionally against the cross sysroot |
 | `flux cache clean [--all\|--unused]` | Manage the local binary cache (not yet implemented, stub) |
 | `flux version` | Print the installed flux version |
-| `flux self-update` | Rebuild flux from the latest release tag and atomically replace the running binary |
-| `flux base-update` | Update kira-base's core image (musl, BusyBox, runit, eudev, curl) to the latest release |
-| `flux kernel-update [-f]` | Download, verify, extract, and boot-configure the latest Shinigami kernel release |
+| `flux why <pkg>` | Trace the dependency chain(s) keeping a package installed |
+| `flux sys check` | Report whether a newer flux, kira-base, or kernel release is available |
+| `flux sys upgrade [flux\|base\|kernel] [-f]` | Rebuild flux from the latest release tag, update kira-base's core image (musl, BusyBox, runit, eudev, curl), or download, verify and install the latest Shinigami kernel. No target does all three |
+| `flux sys clean kernel [--keep N] [-y]` | Remove old kernels beyond the newest N (default 2); the running kernel is never removed |
+| `flux checksum-backfill` | Record checksums for packages installed before modified-file tracking existed |
 
 ---
 
@@ -41,7 +44,7 @@ flux is a minimal package manager written in C: a single static binary that buil
 
 flux resolves every package name against one of two sources, decided purely by the name itself:
 
-- **`kira-*`** - always a kotodama recipe, built from source. This is Kira's own software: the distro's meta-packages, desktop environments, and anything genuinely unavailable elsewhere (vendored and renamed to fit the prefix, e.g. the Sleex DE ships as `kira-sleex`).
+- **`kira-*`** - always a kotodama recipe, built from source. This is Kira's own software: the distro's meta-packages, desktop environments, and anything genuinely unavailable elsewhere (vendored and renamed to fit the prefix, e.g. the Sleex DE ships as `kira-sleex`, and Kira's own desktop as `kira-the-line`).
 - **everything else** - always resolved live against [Alpine Linux's package index](https://pkgs.alpinelinux.org/packages) (APKINDEX + `.apk`), natively parsed and verified by flux itself. No separate `apk` binary is ever shelled out to, and no local recipe is required.
 
 There is no fallback between the two - a missing `kira-*` recipe is just a "package not found" error. `flux install --flatpak <pkg>` installs via Flathub explicitly, bypassing both.
@@ -141,7 +144,7 @@ alpine_branch = latest-stable
 
 `alpine_mirror_url`/`alpine_branch` default to Alpine's own CDN and the `edge` branch if left unset. `latest-stable` (what Kira itself ships, in `kira-base`'s own `flux.conf`) is a real path on Alpine's CDN, not a placeholder - it always points at whatever Alpine's current stable release is, so it tracks forward on its own without ever needing to be bumped by hand. A specific version also works directly, e.g. `alpine_branch = v3.22`.
 
-`flux update` always clones/syncs `flux-recipes`' GitHub default branch (`FLUX_RECIPES_REPO_URL`, compiled into `include/flux.h`) - there is no config option to pick a different one. Note `remote_repo_url` above is parsed but not currently used for anything.
+`flux check` always clones/syncs `flux-recipes`' GitHub default branch (`FLUX_RECIPES_REPO_URL`, compiled into `include/flux.h`) - there is no config option to pick a different one. Note `remote_repo_url` above is parsed but not currently used for anything.
 
 `flux_secret_key_path` only needs to exist on a machine that publishes packages. If it's missing, `flux build`/`flux install` skip cache signing and storage instead of failing.
 
@@ -197,36 +200,36 @@ Exit codes are stable. They will not be renumbered.
 
 flux uses Kira's own release-based scheme, not semver: `YY.MM`, with an optional `-N` suffix for a hotfix release in that month (`26.06`, then `26.06-1` for the first hotfix). The version is a single compiled-in constant, `FLUX_VERSION` in `include/flux.h` - there's no separate VERSION file to drift out of sync with the binary.
 
-Cutting a release is just `git tag <version> && git push --tags` on the `flux` repo - no GitHub Release object needed. `flux update` and `flux self-update` read tags directly off the remote with `git ls-remote --tags`, pick the highest one with `sort -V`, and compare it against `FLUX_VERSION`. `flux update` just prints a notice if they differ; `flux self-update` does the actual rebuild-and-swap.
+Cutting a release is just `git tag <version> && git push --tags` on the `flux` repo - no GitHub Release object needed. `flux sys check` and `flux sys upgrade flux` read tags directly off the remote with `git ls-remote --tags`, pick the highest one with `sort -V`, and compare it against `FLUX_VERSION`. `flux sys check` just prints a notice if they differ; `flux sys upgrade flux` does the actual rebuild-and-swap.
 
-## Package update reporting (`flux update` / `flux update -i`)
+## Package update reporting (`flux check` / `flux upgrade`)
 
-`flux update` diffs the recipe repo's old and new `HEAD` after syncing (`git diff --name-only <old> <new> -- '*/kotodama'`) to find every recipe that changed. For each changed `<pkg>/kotodama`, if `pkg` is currently installed and its recorded version (`/var/lib/flux/installed/<pkg>/info`) differs from the version now in the recipe, it's reported as `pkg  old -> new`. Recipes that changed but aren't installed, or whose version didn't actually change (a comment tweak, a hook fix without a version bump), are not reported - this is meant to answer "what's outdated on my system," not "what changed upstream."
+`flux check` diffs the recipe repo's old and new `HEAD` after syncing (`git diff --name-only <old> <new> -- '*/kotodama'`) to find every recipe that changed. For each changed `<pkg>/kotodama`, if `pkg` is currently installed and its recorded version (`/var/lib/flux/installed/<pkg>/info`) differs from the version now in the recipe, it's reported as `pkg  old -> new`. Recipes that changed but aren't installed, or whose version didn't actually change (a comment tweak, a hook fix without a version bump), are not reported - this is meant to answer "what's outdated on my system," not "what changed upstream."
 
-`flux update` also re-fetches and re-verifies both Alpine indexes (`main`/`community`) into `/var/cache/flux/alpine/`, then for every installed `source = alpine` package compares its recorded version against that freshly synced index the same way. This is also the only time the Alpine index is ever fetched over the network - `flux install`/`flux search` only ever read the cache `flux update` last wrote, so a first `flux install` of an Alpine package on a machine that has never run `flux update` fails with a "run 'flux update' first" error rather than silently fetching on its own.
+`flux check` also re-fetches and re-verifies both Alpine indexes (`main`/`community`) into `/var/cache/flux/alpine/`, then for every installed `source = alpine` package compares its recorded version against that freshly synced index the same way. This is also the only time the Alpine index is ever fetched over the network - `flux install`/`flux search` only ever read the cache `flux check` last wrote, so a first `flux install` of an Alpine package on a machine that has never run `flux check` fails with a "run 'flux check' first" error rather than silently fetching on its own.
 
-Plain `flux update` only reports; `flux update -i` additionally force-reinstalls (`flux install -y -f`) every package it just reported - kotodama or Alpine alike - upgrading them to the version just synced.
+`flux check` only reports (`--files` adds the locally modified files); `flux upgrade` installs exactly what it reported (`flux install -y`, one batch) - kotodama or Alpine alike - upgrading them to the version just synced.
 
-`flux update` does not touch flatpak - `flux install --flatpak <pkg>` is the only flatpak-aware path, and updating an installed flatpak app is left to `flatpak update` directly.
+Neither touches flatpak - `flux install --flatpak <pkg>` is the only flatpak-aware path, and updating an installed flatpak app is left to `flatpak update` directly.
 
-## kira-base updates (`flux base-update`)
+## kira-base updates (`flux sys upgrade base`)
 
-`kira-base` (musl, BusyBox, runit, eudev, the bootstrap `dhcpcd`/`curl`) isn't flux-managed and can't rebuild itself from source on an installed system the way flux can - it needs a cross-toolchain and kernel source tree. Instead, `flux update` reads `/etc/kira-release` and checks the `kira-base` repo's tags the same way it checks flux's own; if there's a newer one it just tells you to run `flux base-update`, it never runs automatically.
+`kira-base` (musl, BusyBox, runit, eudev, the bootstrap `dhcpcd`/`curl`) isn't flux-managed and can't rebuild itself from source on an installed system the way flux can - it needs a cross-toolchain and kernel source tree. Instead, `flux sys check` reads `/etc/kira-release` and checks the `kira-base` repo's tags the same way it checks flux's own; if there's a newer one it just tells you to run `flux sys upgrade base`, it never runs automatically.
 
-`flux base-update` fetches that release's `rootfs.tar.gz` and `initramfs.cpio.gz` from `binary_cache_url` (minisign-verified, same key as the package cache), then applies `/etc/kira-update-manifest` from inside the new rootfs - a list `kira-base`'s own Makefile generates, classifying every core file as:
+`flux sys upgrade base` fetches that release's `rootfs.tar.gz` and `initramfs.cpio.gz` from `binary_cache_url` (minisign-verified, same key as the package cache), then applies `/etc/kira-update-manifest` from inside the new rootfs - a list `kira-base`'s own Makefile generates, classifying every core file as:
 - `live <path>`: safe to atomically replace right now (musl, BusyBox, curl, the CA bundle, the bootstrap `dhcpcd`) - nothing has it loaded as a continuously-running process, so new invocations just pick up the new file.
 - `restart:<service> <path>`: replaced now, then that runit service is restarted (`eudev`, since unlike PID 1 it's a normal supervised service).
 - `boot <path>`: replaced on disk now, but only takes effect on the next reboot (runit's own `runit-init`/`runsvdir`/`runsv` binaries and the `runit/1,2,3` stage scripts - they're continuously running already, replacing the file doesn't change what's executing in memory).
 
-The new `/boot/initrd.img-<kernel>` is staged the same way, always reboot-required. `flux base-update` tells you at the end whether a reboot is needed.
+The new `/boot/initrd.img-<kernel>` is staged the same way, always reboot-required. `flux sys upgrade base` tells you at the end whether a reboot is needed.
 
-## Kernel updates (`flux kernel-update`)
+## Kernel updates (`flux sys upgrade kernel`)
 
-The Shinigami kernel is versioned as `<linux-version>-shinigami-<shinigami-version>` (e.g. `7.1.3-shinigami-26.07-4`), read straight off `uname -r`. `flux kernel-update` compares that against `{binary_cache_url}/kira-kernel/latest`, and if there's a newer one: downloads `kira-kernel-<version>.tar.gz` + its `.minisig` from the cache, verifies the signature, extracts it directly onto `/`, runs `depmod -a <version>` to regenerate module dependencies, and updates GRUB if `grub-mkconfig`/`update-grub` is present. The previous kernel's `/lib/modules/<version>` directory is left in place for rollback. Like `base-update`, this never runs automatically (`flux update` just notices a newer version is available and tells you to run it), and it always ends by reporting that a reboot is required.
+The Shinigami kernel is versioned as `<linux-version>-shinigami-<shinigami-version>` (e.g. `7.3.1-shinigami-26.11-1`), read straight off `uname -r`. `flux sys upgrade kernel` compares that against `{binary_cache_url}/kira-kernel/latest`, and if there's a newer one: downloads `kira-kernel-<version>.tar.gz` + its `.minisig` from the cache, verifies the signature, extracts it directly onto `/`, runs `depmod -a <version>` to regenerate module dependencies, and updates GRUB if `grub-mkconfig`/`update-grub` is present. The previous kernel's `/lib/modules/<version>` directory is left in place for rollback; `flux sys clean kernel` removes the old ones beyond the newest N (the running kernel is never a candidate). Like the base update, this never runs automatically (`flux sys check` just notices a newer version is available and tells you to run it), and it always ends by reporting that a reboot is required.
 
 ## Status
 
-`install`, `remove`, `autoremove`, `update`, `list`, `build`, `version`, `self-update`, `base-update`, `kernel-update` are fully working against both sources (kotodama and Alpine), including cross-compilation, mixed-source dependency resolution, a local + remote binary cache for kotodama builds, and a fully-implemented auto-installed/orphan tracking model.
+`install`, `remove`, `autoremove`, `check`, `upgrade`, `why`, `list`, `build`, `version` and `sys` are fully working against both sources (kotodama and Alpine), including cross-compilation, mixed-source dependency resolution, a local + remote binary cache for kotodama builds, and a fully-implemented auto-installed/orphan tracking model.
 
 Known gaps: `search`/`info` only see kotodama recipes, not the Alpine index; `flux cache` is a stub (every subcommand just prints a placeholder).
 
