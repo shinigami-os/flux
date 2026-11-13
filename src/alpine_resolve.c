@@ -141,6 +141,10 @@ int alpine_resolve_deps(const alpine_repos_t *repos, const alpine_pkg_t *pkg,
         alpine_strip_constraint(tok, bare, sizeof(bare));
         if (bare[0] == '\0') continue;
 
+        // /bin/sh is BusyBox's, shipped by kira-base: letting the resolver pick a provider for it can queue
+        // busybox-binsh for one package and bash-binsh for another in the same install, and they conflict
+        if (strcmp(bare, "/bin/sh") == 0 || strcmp(bare, "cmd:sh") == 0) continue;
+
         const alpine_pkg_t *provider = NULL;
         // an exact package name always wins outright, whether or not it's also a capability
         // token (so:/cmd:/pc: are never real package names, so skip this for those)
