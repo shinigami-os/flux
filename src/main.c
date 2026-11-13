@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -75,6 +77,8 @@ int main(int argc, char **argv) {
         flux_usage();
         return FLUX_ERR_USAGE;
     }
+    // a private or missing git source must be skipped, never ask for a GitHub login in the middle of a command
+    setenv("GIT_TERMINAL_PROMPT", "0", 1);
     char *command = argv[1];
     if (strcmp(command, "--version") == 0 || strcmp(command, "-v") == 0)
         command = "version";
