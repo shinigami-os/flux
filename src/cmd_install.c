@@ -254,8 +254,8 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         }
         const char *real_name = p->name; // queue/install by the real package name, not whatever capability name was asked for
 
-        // kira-base's bootstrap layer (musl, static busybox, ...) is never flux-managed - already satisfied, not installable
-        if (strcmp(real_name, "musl") == 0 || strcmp(real_name, "busybox") == 0) return FLUX_ERR_NONE;
+        // kira-base's bootstrap layer (musl, static busybox, libkmod, ...) is never flux-managed - already satisfied, not installable
+        if (strcmp(real_name, "musl") == 0 || strcmp(real_name, "busybox") == 0 || strcmp(real_name, "kmod-libs") == 0) return FLUX_ERR_NONE;
 
         // claim real_name itself *before* resolving its own deps, not just what it resolves to - a
         // package requested directly by name (e.g. "polkit-elogind-libs" from a recipe's own runtime=
