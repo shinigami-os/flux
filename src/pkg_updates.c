@@ -20,45 +20,31 @@ static int get_git_head(const char *repo_path, char *out, size_t outlen) {
     return strlen(out) > 0 ? FLUX_ERR_NONE : FLUX_ERR_GENERAL;
 }
 
-// only reports changed <pkg>/kotodama files where pkg is installed and its version actually changed - "update available" should only mean something for packages on this system
-static int report_and_collect_kotodama_updates(const flux_config_t *config, const char *old_head, const char *new_head,
-                                                char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
-    *count = 0;
+// compares each installed kotodama package's recorded version against its recipe - looking at the installed set rather than at what the last sync changed means an update is still reported when the recipe repo was already pulled by an earlier run
+static int collect_kotodama_updates(const flux_config_t *config, char outdated[][FLUX_MAX_NAME_LEN], int max, int *count) {
+    char names[FLUX_MAX_INSTALL_QUEUE][FLUX_MAX_NAME_LEN];
+    int n = 0;
+    if (flux_db_list_installed(names, FLUX_MAX_INSTALL_QUEUE, &n) != FLUX_ERR_NONE) return FLUX_ERR_GENERAL;
 
-    char cmd[FLUX_MAX_PATH_LEN + 128];
-    snprintf(cmd, sizeof(cmd), "git -C \"%s\" diff --name-only %s %s -- '*/kotodama'",
-             config->local_repo_path, old_head, new_head);
-    FILE *f = popen(cmd, "r");
-    if (!f) return FLUX_ERR_GENERAL;
-
-    char line[FLUX_MAX_PATH_LEN];
     flux_table_row_t rows[FLUX_MAX_INSTALL_QUEUE];
-    while (*count < max && fgets(line, sizeof(line), f)) {
-        strip_newline(line);
-        char *slash = strchr(line, '/');
-        if (!slash || strcmp(slash + 1, "kotodama") != 0) continue;
-        *slash = '\0';
-        const char *pkg = line;
-
-        if (!flux_db_is_installed(pkg)) continue;
-
+    for (int i = 0; i < n && *count < max; i++) {
         flux_pkg_info_t info;
-        if (flux_db_read_info(pkg, &info) != FLUX_ERR_NONE) continue;
+        if (flux_db_read_info(names[i], &info) != FLUX_ERR_NONE) continue;
+        if (strcmp(info.source, "kotodama") != 0) continue;
 
         char koto_path[FLUX_MAX_PATH_LEN * 2 + 16];
-        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, pkg);
+        snprintf(koto_path, sizeof(koto_path), "%s/%s/kotodama", config->local_repo_path, names[i]);
         flux_recipe_t recipe;
         memset(&recipe, 0, sizeof(recipe));
         if (parse_kotodama(&recipe, koto_path) != FLUX_ERR_NONE) continue;
 
         if (recipe.version[0] == '\0' || strcmp(info.version, recipe.version) == 0) continue;
 
-        strncpy(rows[*count].col1, pkg, FLUX_MAX_NAME_LEN - 1);
+        strncpy(rows[*count].col1, names[i], FLUX_MAX_NAME_LEN - 1);
         snprintf(rows[*count].col2, sizeof(rows[*count].col2), "%s -> %s", info.version, recipe.version);
-        strncpy(outdated[*count], pkg, FLUX_MAX_NAME_LEN - 1);
+        strncpy(outdated[*count], names[i], FLUX_MAX_NAME_LEN - 1);
         (*count)++;
     }
-    pclose(f);
 
     if (*count > 0) {
         char title[64];
@@ -218,13 +204,7 @@ int flux_collect_package_updates(flux_config_t *config, char outdated[][FLUX_MAX
     if (flux_sync_recipe_repo(config, old_head, sizeof(old_head), &have_old_head) != FLUX_ERR_NONE)
         return FLUX_ERR_NETWORK;
 
-    if (have_old_head) {
-        char new_head[64] = {0};
-        if (get_git_head(config->local_repo_path, new_head, sizeof(new_head)) == FLUX_ERR_NONE &&
-            strcmp(old_head, new_head) != 0) {
-            report_and_collect_kotodama_updates(config, old_head, new_head, outdated, max, count);
-        }
-    }
+    collect_kotodama_updates(config, outdated, max, count);
 
     char arch[ALPINE_MAX_ARCH_LEN];
     alpine_repos_t alpine_repos;
