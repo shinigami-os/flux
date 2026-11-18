@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "../include/flux.h"
 #include "../include/util.h"
 
@@ -78,9 +79,12 @@ static int download_signed_kernel(const char *cache_url, const char *version,
 
 int flux_kernel_update(int argc, char **argv, const char *usage) {
     int force = 0;
+    int clean = 0;
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0)
             force = 1;
+        else if (strcmp(argv[i], "--clean") == 0)
+            clean = 1;
         else {
             flux_usage_error(usage);
             return FLUX_ERR_USAGE;
@@ -172,6 +176,19 @@ int flux_kernel_update(int argc, char **argv, const char *usage) {
     system(cmd);
 
     flux_ok("kernel updated to %s", latest);
+
+    // the running kernel is never a candidate, so right after an update this keeps it (rollback)
+    // plus the new one and drops everything older. Without --clean it asks, but only on a terminal:
+    // a script or the installer must never block on a prompt
+    if (clean) {
+        char *clean_argv[] = { "-y" };
+        flux_sys_clean_kernel(1, clean_argv);
+    } else if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+        flux_sys_clean_kernel(0, NULL);
+    } else {
+        flux_step("old kernels are kept, run 'flux sys clean kernel' (or pass --clean) to remove them");
+    }
+
     flux_warn("reboot required to boot the new kernel");
     return FLUX_ERR_NONE;
 }

@@ -101,7 +101,7 @@ static int sys_check(void) {
 }
 
 static int sys_upgrade(int argc, char **argv) {
-    static const char *upgrade_usage = "flux sys upgrade [flux|base|kernel] [-f]";
+    static const char *upgrade_usage = "flux sys upgrade [flux|base|kernel] [-f] [--clean]";
 
     if (argc == 0) {
         // same batch-resilience philosophy as a package batch install: one layer
@@ -138,7 +138,7 @@ typedef struct {
 // see flux_kernel_update's own comment on old_modules_path), so without this every update
 // just adds another ~90-190MB under /lib/modules + /boot forever. Never a candidate: the
 // currently *running* kernel (uname -r), regardless of how old or how it sorts by mtime
-static int sys_clean_kernel(int argc, char **argv) {
+int flux_sys_clean_kernel(int argc, char **argv) {
     static const char *clean_usage = "flux sys clean kernel [--keep N] [-y]";
     int keep = FLUX_KERNEL_CLEAN_DEFAULT_KEEP;
     int yes = 0;
@@ -270,7 +270,7 @@ int flux_sys(int argc, char **argv, const char *usage) {
             flux_usage_error("flux sys clean kernel [--keep N] [-y]");
             return FLUX_ERR_USAGE;
         }
-        return sys_clean_kernel(argc - 2, argv + 2);
+        return flux_sys_clean_kernel(argc - 2, argv + 2);
     }
 
     flux_usage_error(usage);

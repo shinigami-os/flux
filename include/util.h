@@ -106,6 +106,8 @@ int flux_cache_verify(const char *path, const char *pub_path);
 
 int flux_fetch_latest_git_tag(const char *repo_url, char *out, size_t outlen);
 int flux_fetch_latest_kernel_version(const char *cache_url, char *out, size_t outlen);
+// removes old kernels beyond --keep N (default 2), never the running one; also what `flux sys upgrade kernel` offers after an update
+int flux_sys_clean_kernel(int argc, char **argv);
 
 // clones/pulls the recipe repo (self-healing a pre-git tarball checkout), printing its own
 // progress/ok. old_head_out/have_old_head_out reflect the repo's HEAD *before* this pull, so a
