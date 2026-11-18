@@ -23,7 +23,7 @@ int flux_why(int argc, char **argv, const char *usage);
 int flux_checksum_backfill(int argc, char **argv, const char *usage);
 
 flux_cmd_t commands[] = {
-    {"install", flux_install, "Install one or more packages (from cache or compile)", "flux install [-y] [-f] [-v] <pkgs>"},
+    {"install", flux_install, "Install one or more packages (from cache or compile)", "flux install [-y] [-f] [-v] [--keep-build-deps] <pkgs>"},
     {"search", flux_search, "Search available recipes", "flux search <query>"},
     {"build", flux_build, "Cross-compile a kotodama recipe into the bootstrap sysroot", "flux build --cross <pkg>"},
     {"remove", flux_remove, "Remove a package, optionally its orphaned deps", "flux remove [-a] <pkg>"},
@@ -34,14 +34,14 @@ flux_cmd_t commands[] = {
     {"checksum-backfill", flux_checksum_backfill, "Record checksums for installed packages that predate conffile protection", "flux checksum-backfill"},
     {"info", flux_info, "Show package details, dependencies, recipes", "flux info <pkg>"},
     {"list", flux_list, "List installed packages", "flux list [-a]"},
-    {"cache", flux_cache, "Manage binary cache", "flux cache <subcommand>"},
+    {"cache", flux_cache, "Manage binary cache", "flux cache clean [--all|--unused] [-y]"},
     {"version", flux_version, "Show the installed flux version", "flux version"},
     {"sys", flux_sys, "Check/upgrade flux itself, kira-base, the kernel - or clean up old kernels", "flux sys check | flux sys upgrade [flux|base|kernel] | flux sys clean kernel [--keep N]"},
     {NULL, NULL, NULL, NULL}
 };
 
 static int needs_root(const char *name) {
-    static const char *const names[] = {"install", "remove", "autoremove", "upgrade", "check", "checksum-backfill", "build", NULL};
+    static const char *const names[] = {"install", "remove", "autoremove", "upgrade", "check", "checksum-backfill", "build", "cache", NULL};
     for (int i = 0; names[i]; i++)
         if (strcmp(name, names[i]) == 0) return 1;
     return 0;
