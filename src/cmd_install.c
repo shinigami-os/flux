@@ -24,6 +24,7 @@ static int g_flatpak = 0;
 // for `flux autoremove`, and the "Installing" vs "installing dependency" header)
 static int g_skip_deps = 0;
 static int g_verbose = 0;
+static int g_keep_build_deps = 0;
 // set right before installing a resolved queue, so try_alpine_install() reuses the index that walk already loaded instead of refetching it per package
 static alpine_repos_t *g_active_repos = NULL;
 
@@ -203,7 +204,18 @@ typedef struct {
     // the names the user actually typed, as opposed to whatever dependency walk pulled in
     char **roots;
     int root_count;
+    // set while walking a recipe's build-time deps (and whatever those pull in): a package that is only ever
+    // reached that way, never as a root or a runtime dep, is not needed once the install is done
+    int in_build;
+    unsigned char visited_rt[FLUX_MAX_INSTALL_QUEUE]; // parallel to collect_deps' visited[]: reached outside a build-dep walk
+    unsigned char queue_rt[FLUX_MAX_INSTALL_QUEUE];   // parallel to the install queue: same meaning
 } collect_ctx_t;
+
+static void mark_queue_runtime(collect_ctx_t *ctx, const flux_install_queue_t *queue, const char *name) {
+    if (ctx->in_build) return;
+    for (int i = 0; i < queue->count; i++)
+        if (strcmp(queue->pkgs[i].name, name) == 0) { ctx->queue_rt[i] = 1; return; }
+}
 
 static int is_requested_root(const collect_ctx_t *ctx, const char *pkg) {
     for (int i = 0; i < ctx->root_count; i++)
@@ -224,11 +236,17 @@ static int ensure_alpine_repos(collect_ctx_t *ctx) {
 }
 
 static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_t *queue, char visited[][FLUX_MAX_NAME_LEN], int *visited_count) {
+    int vidx = -1;
     for (int i = 0; i < *visited_count; i++)
-        if (strcmp(visited[i], pkg) == 0) return FLUX_ERR_NONE;
+        if (strcmp(visited[i], pkg) == 0) { vidx = i; break; }
 
-    if (*visited_count < FLUX_MAX_INSTALL_QUEUE) {
+    if (vidx >= 0) {
+        if (ctx->in_build || ctx->visited_rt[vidx]) return FLUX_ERR_NONE;
+        // first met as a build dep, now needed at runtime too: walk it again so its own deps follow suit
+        ctx->visited_rt[vidx] = 1;
+    } else if (*visited_count < FLUX_MAX_INSTALL_QUEUE) {
         strncpy(visited[*visited_count], pkg, FLUX_MAX_NAME_LEN - 1);
+        ctx->visited_rt[*visited_count] = !ctx->in_build;
         (*visited_count)++;
     }
 
@@ -327,6 +345,7 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
             queue->pkgs[queue->count].size = p->size;
             queue->count++;
         }
+        mark_queue_runtime(ctx, queue, real_name);
         return FLUX_ERR_NONE;
     }
 
@@ -376,13 +395,16 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         counts[1] = FLUX_MAX_DEPS;
     }
 
+    int saved_in_build = ctx->in_build;
     for (int l = 0; l < 2; l++) {
         if (!lists[l]) continue;
+        if (l == 1) ctx->in_build = 1;
         for (int i = 0; i < counts[l]; i++) {
             if (strlen(lists[l][i]) == 0) continue;
             int err = collect_deps(lists[l][i], ctx, queue, visited, visited_count);
-            if (err != FLUX_ERR_NONE) return err;
+            if (err != FLUX_ERR_NONE) { ctx->in_build = saved_in_build; return err; }
         }
+        ctx->in_build = saved_in_build;
     }
 
     if (!queue_contains(queue, pkg) && queue->count < FLUX_MAX_INSTALL_QUEUE) {
@@ -391,6 +413,7 @@ static int collect_deps(const char *pkg, collect_ctx_t *ctx, flux_install_queue_
         queue->pkgs[queue->count].source = 'K';
         queue->count++;
     }
+    mark_queue_runtime(ctx, queue, pkg);
 
     return FLUX_ERR_NONE;
 }
@@ -673,6 +696,8 @@ int flux_install(int argc, char **argv, const char *usage) {
             g_flatpak = 1;
         else if (strcmp(argv[0], "-v") == 0 || strcmp(argv[0], "--verbose") == 0)
             g_verbose = 1;
+        else if (strcmp(argv[0], "--keep-build-deps") == 0)
+            g_keep_build_deps = 1;
         else {
             flux_usage_error(usage);
             return FLUX_ERR_USAGE;
@@ -1107,6 +1132,17 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
         return err;
     }
 
+    // packages this run pulls in only to compile something, that were not on the system before: removed
+    // again once everything is installed. A dep that was already installed (even if it is being upgraded)
+    // is never touched, nor anything a root or a runtime dep needs
+    unsigned char build_only[FLUX_MAX_INSTALL_QUEUE];
+    int build_only_count = 0;
+    for (int i = 0; i < queue.count; i++) {
+        build_only[i] = !g_keep_build_deps && !is_requested_root(&ctx, queue.pkgs[i].name) &&
+                        !ctx.queue_rt[i] && !flux_db_is_installed(queue.pkgs[i].name);
+        build_only_count += build_only[i];
+    }
+
     flux_grid_item_t rows[FLUX_MAX_INSTALL_QUEUE];
     long total_download_bytes = 0;
     int unknown_size_count = 0;
@@ -1136,12 +1172,16 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
     char title[64];
     snprintf(title, sizeof(title), "%d package%s will be installed",
              queue.count, queue.count == 1 ? "" : "s");
-    char footer[96];
+    char footer[160];
     if (unknown_size_count > 0)
         snprintf(footer, sizeof(footer), "%.1fMB to download (+%d built from source)",
                  total_download_bytes / 1024.0 / 1024.0, unknown_size_count);
     else
         snprintf(footer, sizeof(footer), "%.1fMB to download", total_download_bytes / 1024.0 / 1024.0);
+    if (build_only_count > 0) {
+        size_t used = strlen(footer);
+        snprintf(footer + used, sizeof(footer) - used, ", %d build-only removed afterwards", build_only_count);
+    }
 
     printf("\n");
     flux_print_grid(title, rows, queue.count, footer);
@@ -1245,6 +1285,8 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
     int failed_is_root[FLUX_MAX_INSTALL_QUEUE];
     int failed_count = 0;
     int installed_count = 0;
+    unsigned char installed_ok[FLUX_MAX_INSTALL_QUEUE];
+    memset(installed_ok, 0, sizeof(installed_ok));
     g_active_repos = &ctx.repos;
     for (int i = 0; i < queue.count; i++) {
         int is_root = 0;
@@ -1267,6 +1309,7 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
             }
         } else {
             installed_count++;
+            installed_ok[i] = 1;
         }
     }
     flux_batch_progress_end();
@@ -1279,6 +1322,24 @@ static int run_install(int argc, char **argv, const char *usage, flux_config_t *
         flux_err("failed to install:");
         for (int i = 0; i < failed_count; i++)
             printf("  %s%s\n", failed_names[i], failed_is_root[i] ? "" : " (dependency)");
+    }
+
+    if (build_only_count > 0) {
+        // after a failure the toolchain stays: the user may want to retry or look at the build,
+        // and 'flux autoremove' collects it later anyway
+        if (failed_count > 0) {
+            flux_step("%d build-only package%s kept because the install failed, 'flux autoremove' removes %s",
+                      build_only_count, build_only_count == 1 ? "" : "s", build_only_count == 1 ? "it" : "them");
+        } else {
+            flux_action("Removing %d build-only package%s", build_only_count, build_only_count == 1 ? "" : "s");
+            for (int i = 0; i < queue.count; i++) {
+                if (!build_only[i] || !installed_ok[i]) continue;
+                if (flux_db_remove(queue.pkgs[i].name) == FLUX_ERR_NONE)
+                    flux_step("removed %s", queue.pkgs[i].name);
+                else
+                    flux_warn("could not remove %s", queue.pkgs[i].name);
+            }
+        }
     }
 
     int overall_err = FLUX_ERR_NONE;
